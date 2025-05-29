@@ -1,0 +1,12 @@
+dioOS Registry | Version 1.0
+
+[HKEY_LOCAL_MACHINE]
+
+[HKEY_LOCAL_MACHINE\SYS_SETTINGS\WM]
+"WALLPAPER"="C:\IMAGES     \wallpaper_default.bmp"
+
+[HKEY_LOCAL_MACHINE\SYS_SETTINGS]
+"Test1"=bool:true
+"Test2"=byte:0x12
+"Test3"=dword:1234
+
