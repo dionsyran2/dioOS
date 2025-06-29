@@ -1,1 +1,2 @@
-This is a project i have been working on. It has no functionality yet!
+Normally i would write instructions on how to compile/build this... but at this moment its so barebones, i mostly use this repo as a backup.
+Well if you wanted to build this there is a makefile... though i do not promise its gonna compile on your machine. (you dont need to go through this pain)
