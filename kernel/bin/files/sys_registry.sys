@@ -1,9 +1,10 @@
 dioOS Registry | Version 1.0
 
+This will be eventually deleted... its completely useless
 [HKEY_LOCAL_MACHINE]
 
 [HKEY_LOCAL_MACHINE\SYS_SETTINGS\WM]
-"WALLPAPER"="C:\IMAGES     \wallpaper_default.bmp"
+"WALLPAPER"="C:\images\wallpaper_default.bmp"
 
 [HKEY_LOCAL_MACHINE\SYS_SETTINGS]
 "Test1"=bool:true
