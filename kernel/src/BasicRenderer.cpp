@@ -71,6 +71,31 @@ void BasicRenderer::draw_char_tty(uint32_t color, uint32_t bg, char chr, unsigne
     }
 }
 
+void BasicRenderer::draw_cursor(uint32_t xOff, uint32_t yOff){
+    char* PSF1_FontPtr = (char*)PSF1_Font->glyphBuffer + ('_' * PSF1_Font->psf1_Header->charsize);
+    for (unsigned long y=yOff; y<yOff + 16; y++){
+        for(unsigned long x = xOff; x<xOff + 8; x++){
+            if((*PSF1_FontPtr & (0b10000000 >> (x - xOff))) > 0){
+                if (x < 0 || x > targetFramebuffer->common.framebuffer_width - 1 || y < 0 || y > targetFramebuffer->common.framebuffer_height - 1) continue;
+                PutPixFB(x, y, 0xFFFFFF);
+            }
+        }
+        PSF1_FontPtr++;
+    }
+}
+void BasicRenderer::clear_cursor(uint32_t xOff, uint32_t yOff){
+    char* PSF1_FontPtr = (char*)PSF1_Font->glyphBuffer + ('_' * PSF1_Font->psf1_Header->charsize);
+    for (unsigned long y=yOff; y<yOff + 16; y++){
+        for(unsigned long x = xOff; x<xOff + 8; x++){
+            if((*PSF1_FontPtr & (0b10000000 >> (x - xOff))) > 0){
+                if (x < 0 || x > targetFramebuffer->common.framebuffer_width - 1 || y < 0 || y > targetFramebuffer->common.framebuffer_height - 1) continue;
+                PutPixFB(x, y, 0);
+            }
+        }
+        PSF1_FontPtr++;
+    }
+}
+
 void BasicRenderer::HandleScrolling() {
     size_t fbSize = targetFramebuffer->common.framebuffer_pitch * targetFramebuffer->common.framebuffer_height;
 
@@ -211,6 +236,13 @@ void BasicRenderer::printfva(uint32_t color, const char* str, va_list args){
                         print(color, str);
                         break;
                     }
+                }
+                case 'c':{
+                    chr++;
+                    char arg = va_arg(args, int);
+                    char st[2] = { arg, '\0'};
+                    print(color, st);
+                    break;
                 }
             }
         continue;

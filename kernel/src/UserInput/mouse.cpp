@@ -4,8 +4,6 @@
 namespace PS2Mouse
 {
 
-    pipehndl mouse_pipe = -1;
-
     void MouseWait()
     {
         uint64_t timeout = 100000;
@@ -153,7 +151,6 @@ namespace PS2Mouse
         data[1] = MousePosition.Y;
         data[2] = bdata;
         data[3] = 0;
-        WritePipe(mouse_pipe, cdata, sizeof(uint64_t) * 4);
     }
 
     void HandlePS2Mouse()
@@ -194,9 +191,6 @@ namespace PS2Mouse
     int Initialize()
     {
 
-        mouse_pipe = CreatePipe("\\devices\\mouse");
-        size_t len = 0;
-        ReadPipe(mouse_pipe, &len, false); //flush the pipe
         // reset
         PS2::EnablePort(2, false);
         PS2::SendCommandToDevice(2, PS2_DEV_RESET);

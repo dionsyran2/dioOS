@@ -181,6 +181,15 @@ void ExpandHeap(size_t length){
         globalPTM.UnmapMemory(page); 
         globalPTM.MapMemory(heapEnd, page);
 
+        task_t* task = task_list;
+        while(task != nullptr){
+            if (task->ptm != nullptr){
+                task->ptm->UnmapMemory(page); 
+                task->ptm->MapMemory(heapEnd, page);
+            }
+
+            task = task->next;
+        }
         /*for (int p = 0; p < taskScheduler::numOfTaskLists; p++){
             taskScheduler::tasklist_t* list = &taskScheduler::tasklists[p];
             

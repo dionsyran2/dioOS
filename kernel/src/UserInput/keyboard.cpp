@@ -1,5 +1,6 @@
 #include <UserInput/keyboard.h>
 #include <pipe.h>
+#include <kernel.h>
 
 namespace PS2KB{
     bool ScrollLock = false;
@@ -7,6 +8,7 @@ namespace PS2KB{
     bool CapsLock = false;
     bool LeftShiftDown = false;
     bool RightShiftDown = false;
+    bool waiting_on_second_int = false; // scancode 0xE0
 
     void SetLEDS(bool ScrollLock, bool NumberLock, bool CapsLock){
         uint8_t payload = 0;
@@ -27,10 +29,12 @@ namespace PS2KB{
         if (scancode == 0xFA){
             scancode = PS2::ReadData();
         }
-
         asm ("sti");
 
         switch (scancode){
+            case 0xE0:
+                waiting_on_second_int = true;
+                return;
             case LeftShift:
                 LeftShiftDown = true;
                 return;
@@ -65,11 +69,32 @@ namespace PS2KB{
                 SetLEDS(ScrollLock, NumberLock, CapsLock);
                 return;
         }
-
-        char ascii = QWERTYKeyboard::Translate(scancode, (CapsLock || (LeftShiftDown || RightShiftDown)) && !(CapsLock && (LeftShiftDown || RightShiftDown)), NumberLock);
-        
-        if (scancode == BackSpace) ascii = '\b';
-        if (scancode == Enter) ascii = '\n';
+        char ascii = 0;
+        if (waiting_on_second_int){
+            waiting_on_second_int = false;
+            switch (scancode){
+                case CURSOR_UP_PRESSED:
+                    ascii = 1;
+                    break;
+                case CURSOR_DOWN_PRESSED:
+                    ascii = 2;
+                    break;
+                case CURSOR_LEFT_PRESSED:
+                    ascii = 3;
+                    break;
+                case CURSOR_RIGHT_PRESSED:
+                    ascii = 4;
+                    break;
+                case NUMPAD_ENTER:
+                    ascii = '\n';
+                    break;
+            }
+        }else{
+            ascii = QWERTYKeyboard::Translate(scancode, (CapsLock || (LeftShiftDown || RightShiftDown)) && !(CapsLock && (LeftShiftDown || RightShiftDown)), NumberLock);
+            
+            if (scancode == BackSpace) ascii = '\b';
+            if (scancode == Enter) ascii = '\n';
+        }
 
         if (ascii == 0) return;
 

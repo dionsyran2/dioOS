@@ -405,7 +405,10 @@ namespace AHCI{
                 char* name = mount_names[offset_in_mount_names];
                 offset_in_mount_names++;
 
-                vblk_t* blk = (vblk_t*)vfs::mount_node(name, VBLK, nullptr); // Create a vnode with $name under '/' (root dir)
+                vnode_t* dev = vfs::resolve_path("/dev");
+                if (dev == nullptr) dev = vfs::mount_node("dev", VDIR, vfs::get_root_node());
+                
+                vblk_t* blk = (vblk_t*)vfs::mount_node(name, VBLK, dev);
                 blk->drv_data = (void*)port;
                 blk->blk_ops.read = read_op;
                 blk->blk_ops.write = write_op;

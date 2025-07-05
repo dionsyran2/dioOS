@@ -1,5 +1,8 @@
 #include <tty/tty.h>
 #include <scheduling/apic/apic.h>
+#include <kerrno.h>
+#include <syscalls/syscalls.h>
+#include <drivers/audio/pc_speaker/pc_speaker.h>
 
 namespace tty{
     tty_t* focused_tty = nullptr;
@@ -7,28 +10,89 @@ namespace tty{
     int vnode_tty_write(const char* txt, size_t length, vnode* this_node){
         tty_t* tty = (tty_t*)this_node->fs_data;
 
-        if ((uint64_t)txt == 1){
-            return (int)tty->rows;
-        }else if ((uint64_t)txt == 2){
-            return (int)tty->cols;
-        }
-
         tty->print(txt, length);
+        return 0;
+    }
+
+    int vnode_tty_iocntl(int op, char* argp, vnode_t* node){
+        tty_t* tty = (tty_t*)node->fs_data;
+        switch (op){
+            case TCGETS:{
+                memcpy(argp, &tty->term, sizeof(termios));
+                break;
+            }
+            case TCSETS:{
+                if (argp == nullptr) break;
+                memcpy(&tty->term, argp, sizeof(termios));
+                serialf("TCSETS: %llx %llx %llx\n\r", tty->term.c_cflag, tty->term.c_iflag, tty->term.c_lflag);
+                break;
+            }
+            case TCSETSW:{
+                if (argp == nullptr) break;
+                memcpy(&tty->term, argp, sizeof(termios));
+                serialf("TCSETS: %llx %llx %llx\n\r", tty->term.c_cflag, tty->term.c_iflag, tty->term.c_lflag);
+                break;
+            }
+            case TIOCGWINSZ:{ // get window size
+                winsize* w = (winsize*)argp;
+                w->ws_col = tty->cols;
+                w->ws_row = tty->rows;
+                w->ws_xpixel = tty->cols * tty->char_width;
+                w->ws_ypixel = tty->rows * tty->char_height;
+                break;
+            }
+            case TIOCSWINSZ:{ // set window size
+                return 0;
+            }
+            case TIOCSPGRP: {
+                int pgid = (*(int*)argp);
+                tty->foreground_group_id = pgid;
+                memset(&tty->term, 0, sizeof(termios));
+                tty->term.c_cflag = CS8 | CREAD | CLOCAL;
+                tty->term.c_lflag = ICANON | ECHO;
+                serialf("set pgid to %d\n\r", pgid);
+                break;
+            }
+            case TIOCGPGRP: {
+                (*(int*)argp) = task_scheduler::get_current_task()->pgid;//tty->foreground_group_id;
+                break;
+            }
+            default:
+                serialf("TTY IOCNTL: %llx %llx\n\r", op, argp);
+                return -ENOTTY;
+        }
         return 0;
     }
 
     void* vnode_tty_read(size_t* length, vnode* this_node){
         tty_t* tty = (tty_t*)this_node->fs_data;
-        while(tty->_waiting_for_read) asm ("hlt");
-        tty->_waiting_for_read = true;
-
-        tty->edit_offset = tty->current_column;
-        while(tty->_data_to_read == false) asm ("hlt");
-        tty->_waiting_for_read = false;
-        tty->_data_to_read = false;
         
-        *length = tty->output_length;
-        return tty->output;
+        if (tty->term.c_lflag & ICANON){// canonical mode
+            tty->_waiting_for_read = true;
+            while(this_node->data_available == false) __asm__ ("pause");
+            this_node->data_available = false;
+            tty->_waiting_for_read = false;
+            char* buffer = new char[tty->offset_in_buffer + 1];
+            memcpy(buffer, tty->buffer, tty->offset_in_buffer);
+            buffer[tty->offset_in_buffer] = '\0';
+            *length = tty->offset_in_buffer;
+            tty->offset_in_buffer = 0;
+            return buffer;
+        }
+
+        if (this_node->data_available == false){
+            *length = 0;
+            return nullptr;
+        }
+
+        while(tty->offset_in_buffer == 0);
+        
+        char* buffer = new char[tty->offset_in_buffer + 1];
+        memcpy(buffer, tty->buffer, tty->offset_in_buffer);
+        buffer[tty->offset_in_buffer] = '\0';
+        *length = tty->offset_in_buffer;
+        tty->offset_in_buffer = 0;
+        return buffer;
     }
 
     void toggle_cursor(tty_t* tty){
@@ -38,13 +102,12 @@ namespace tty{
             uint32_t row = tty->current_row;
             uint32_t col = tty->current_column;
 
-            tty->set_chr(row, col, 0xFFFFFF, 0x000000, '_', 0);
-            tty->draw_cell(row, col);
+            globalRenderer->draw_cursor(col * tty->char_width, (row * tty->char_height) + 2);
             Sleep(500);
+            
+            while(tty->_no_cursor);
 
-            if (tty->get_cell(row, col)->ch != '_') continue;;
-            tty->set_chr(row, col, 0, 0x000000, ' ', 0);
-            tty->draw_cell(row, col);
+            globalRenderer->clear_cursor(col * tty->char_width, (row * tty->char_height) + 2);
             Sleep(500);
         }
         
@@ -64,9 +127,13 @@ namespace tty{
 
         // Create the terminal
         vnode_t* dev = vfs::resolve_path("/dev");
+        if (dev == nullptr){
+            dev = vfs::mount_node("dev", VNODE_TYPE::VDIR, nullptr);
+        }
         vnode_t* tty_node = vfs::mount_node(name, VCHR, dev);
         tty_node->ops.write = vnode_tty_write;
         tty_node->ops.load = vnode_tty_read;
+        tty_node->ops.iocntl = vnode_tty_iocntl;
 
         tty_t* tty = new tty_t;
         memset(tty, 0, sizeof(tty_t));
@@ -74,7 +141,6 @@ namespace tty{
         tty_node->fs_data = (void*)tty;
 
         tty->node = tty_node;
-        tty->mode = true; // Enable loop-back
 
         // We will use vga fonts that are 8x16
         tty->char_width = 8;
@@ -84,7 +150,6 @@ namespace tty{
         tty->cols = globalRenderer->targetFramebuffer->common.framebuffer_width / tty->char_width;
 
         tty->buffer = new char[1024];
-
         tty->fg = 0xFFFFFF;
 
         // Allocate the table
@@ -92,9 +157,13 @@ namespace tty{
 
         tty->clear();
 
-        taskScheduler::task_t* task = taskScheduler::CreateTask((void*)toggle_cursor, 0, false);
-        task->Context = tty;
-        task->valid = true;
+        tty->term.c_cflag |= CS8 | CREAD | CLOCAL;
+        tty->term.c_lflag |= ICANON | ECHO;
+
+        task_t* task = task_scheduler::create_thread(task_scheduler::get_current_task(), (function)toggle_cursor);
+        if (task == nullptr) task = task_scheduler::create_process("Teletype Terminal Emulator Cursor", (function)toggle_cursor);
+        task->rdi = (uint64_t)tty;
+        task_scheduler::mark_ready(task);
 
 
         focused_tty = tty;
@@ -190,17 +259,17 @@ namespace tty{
                             break;
                         case 30: fg = 0x000000; break;
                         case 31: fg = 0xFF0000; break;
-                        case 32: fg = 0x00FF00; break;
+                        case 32: fg = 0x16C60C; break;
                         case 33: fg = 0xFFFF00; break;
-                        case 34: fg = 0x0000FF; break;
+                        case 34: fg = 0x3B78FF; break;
                         case 35: fg = 0xFF00FF; break;
                         case 36: fg = 0x00FFFF; break;
                         case 37: fg = 0xFFFFFF; break;
                         case 40: bg = 0x000000; break;
                         case 41: bg = 0xFF0000; break;
-                        case 42: bg = 0x00FF00; break;
+                        case 42: bg = 0x16C60C; break;
                         case 43: bg = 0xFFFF00; break;
-                        case 44: bg = 0x0000FF; break;
+                        case 44: bg = 0x3B78FF; break;
                         case 45: bg = 0xFF00FF; break;
                         case 46: bg = 0x00FFFF; break;
                         case 47: bg = 0xFFFFFF; break;
@@ -234,18 +303,18 @@ namespace tty{
 
 
     void tty::write_chr(char chr){
-        serialWrite(COM1, chr);
+        //if (chr != '\a') serialWrite(COM1, chr);
         bool prev = _no_cursor;
         _no_cursor = true;
         switch (chr){
             case '\a':
-                print("[ALERT CODE]\n", 13);
+                beep();
                 break;
 
             case '\b':
                 if (current_column > 0){
                     current_column--;
-                    set_chr(current_row, current_column, 0xFFFFFF, 0, ' ', 0);
+                    set_chr(current_row, current_column, fg, bg, ' ', style);
                     draw_cell(current_row, current_column);
                 }
                 break;
@@ -298,34 +367,57 @@ namespace tty{
 
 
     void tty::handle_key(char ascii){
-        while(_writing_data);
-        if (!_waiting_for_read) return; // return if no input is requested
+        if (!_waiting_for_read && (term.c_lflag & ICANON)) return; // return if no input is requested (CANONICAL ONLY!)
 
-        if (ascii != '\0' && ascii != '\b'){
-            write_chr(ascii);
+
+        if (ascii != '\0' && ascii != '\b' && ascii > 5){
+            if ((term.c_lflag & ECHO)) write_chr(ascii);
         }
 
         // add it to a buffer;
-        if (ascii == '\b') {
-            if (offset_in_buffer == 0) return;
+        if (ascii == '\b' && (term.c_lflag & ICANON)) {
+            if (offset_in_buffer == 0) {write_chr('\a'); return;}
             offset_in_buffer--;
             if (edit_offset <= current_column){
-                write_chr('\b');
+                if ((term.c_lflag & ECHO)) write_chr('\b');
+                if ((term.c_lflag & ECHO)) write_chr(' ');
+                if ((term.c_lflag & ECHO)) write_chr('\b');
             }
-
             return;
         }
-        buffer[offset_in_buffer] = ascii;
-        offset_in_buffer++;
 
-        if (ascii == '\n'){
-            output_length = offset_in_buffer;
-            output = new char[output_length];
+        if (ascii <= 5){
+            buffer[offset_in_buffer] = '\x1B';
+            offset_in_buffer++;
 
-            memcpy(output, buffer, output_length);
-            memset(buffer, 0, offset_in_buffer);
-            offset_in_buffer = 0;
-            _data_to_read = true;
+            buffer[offset_in_buffer] = '[';
+            offset_in_buffer++;
+            switch (ascii){
+                case 1: // UP arrow
+                    buffer[offset_in_buffer] = 'A';
+                    break;
+                case 2: // DOWN arrow
+                    buffer[offset_in_buffer] = 'B';
+                    break;
+                case 3: // LEFT arrow
+                    buffer[offset_in_buffer] = 'D';
+                    break;
+                case 4: // RIGHT arrow
+                    buffer[offset_in_buffer] = 'C';
+                    break;
+            }
+            offset_in_buffer++;
+        }else{
+            buffer[offset_in_buffer] = ascii;
+            offset_in_buffer++;
+        }
+        
+        if ((term.c_lflag & ICANON) == 0){
+            node->data_available = true;
+        }
+
+        if (ascii == '\n' && (term.c_lflag & ICANON)){
+            node->data_available = true;
         }
     }
 }

@@ -168,18 +168,21 @@ namespace filesystem{
     void fat32::_init(){
         _parse_data();
         _load_fat();
-
-        vnode_t* mnt = vfs::resolve_path("/mnt");
-        if (mnt == nullptr){
-            mnt = vfs::mount_node("mnt", VDIR, nullptr);
-        }
         
-        char* name = new char[strlen(disk->node.name) + 2];
-        strcpy(name, disk->node.name);
-        strcat(name, toString((uint8_t)(disk->num_of_partitions + 1)));
-        disk->num_of_partitions++;
+        vnode_t* fs = vfs::get_root_node();
+        if (!vfs::is_root()){ // check if this should be mounted as the root partition, if not change the fs
+            vnode_t* mnt = vfs::resolve_path("/mnt");
+            if (mnt == nullptr){
+                mnt = vfs::mount_node("mnt", VDIR, nullptr);
+            }
+            
+            char* name = new char[strlen(disk->node.name) + 2];
+            strcpy(name, disk->node.name);
+            strcat(name, toString((uint8_t)(disk->num_of_partitions + 1)));
+            disk->num_of_partitions++;
+            fs = vfs::mount_node(name, VDIR, mnt);
+        }
 
-        vnode_t* fs = vfs::mount_node(name, VDIR, mnt);
         fs->fs_sec_data = (void*)this;
         fs->fs_data = nullptr;
         //fs->ops.read_dir = fat32_list_dir;
@@ -266,6 +269,7 @@ namespace filesystem{
             }
 
             vnode_t* node = _create_vnode_from_fat_dir(directory, _parse_name(data, i));
+            node->parent = parent;
             parent->children[parent->num_of_children] = node;
             parent->num_of_children++;
 
@@ -404,6 +408,7 @@ namespace filesystem{
         node->fs_data = (void*)dir;
         node->fs_sec_data = (void*)this;
         node->type = dir->attributes == FAT_DIRECTORY ? VDIR : VREG;
+        node->size = dir->file_size_in_bytes;
         node->ops.read_dir = vfs::def_read_dir;
         node->ops.load = fat32_load;
         node->ops.write = fat32_write;
@@ -728,7 +733,8 @@ namespace filesystem{
             new_data[1].first_cluster_high = parent->first_cluster_high;
             new_data[1].first_cluster_low = parent->first_cluster_low;
 
-            disk->blk_ops.write(calculate_block(free_cluster), blocks_per_page, new_data, disk); // PRAY
+            write_data(dir, parent, (char*)new_data, 0x1000);
+            //disk->blk_ops.write(calculate_block(free_cluster), blocks_per_page, new_data, disk); // PRAY
         } else {
             // File: leave cluster and size = 0, explicitly shown
             dir->first_cluster_high = 0;
@@ -739,8 +745,9 @@ namespace filesystem{
         void* mem = GlobalAllocator.RequestPages((count / 0x1000) + 1);
         memcpy(mem, data, count);
 
-        _save_fat();
-        disk->blk_ops.write(calculate_block(cluster), (count / 0x1000) * blocks_per_page, mem, disk); // PRAY
+        write_data(parent, nullptr, (char*)mem, count);
+        GlobalAllocator.FreePages(mem, (count / 0x1000) + 1);
+        //disk->blk_ops.write(calculate_block(cluster), (count / 0x1000) * blocks_per_page, mem, disk); // PRAY
 
         return dir;
     }

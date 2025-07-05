@@ -1,135 +1,70 @@
 #include <pipe.h>
-ArrayList<pipe*>* pipes = nullptr;
-int lhndl = 1;
 
-pipehndl CreatePipe(char* name){
-    if (pipes == nullptr) pipes = new ArrayList<pipe*>();
-    pipe* p = new pipe;
-    strcpy(p->name, name);
-
-    p->buffer = (char*)GlobalAllocator.RequestPage();
-    memset(p->buffer, 0, 0x1000);
-
-    p->hndl = lhndl;
-    lhndl++;
-    p->rp = 0;
-    p->wp = 0;
-
-    pipes->add(p);
-    return p->hndl;
-}
-
-pipehndl GetPipe(char* name){
-    for (size_t i = 0; i < pipes->length(); i++){
-        pipe* p = pipes->get(i);
-        if (strcmp(p->name, name) == 0){
-            return p->hndl;
-        } 
-    }
-    return -1;
-}
-
-pipe* GetPipe(pipehndl hndl){
-    for (size_t i = 0; i < pipes->length(); i++){
-        pipe* p = pipes->get(i);
-        if (p->hndl == hndl){
-            return p;
-        } 
-    }
-    return nullptr;
-}
-
-void DestroyPipe(pipehndl hndl){
-    pipe* p = GetPipe(hndl);
-    if (p == nullptr) return;
-    pipes->remove(p);
-}
-
-int GetReadPointer(pipehndl hndl){
-    pipe* p = GetPipe(hndl);
-    if (p == nullptr) return 0;
-    return p->rp;
-}
-
-int GetWritePointer(pipehndl hndl){
-    pipe* p = GetPipe(hndl);
-    if (p == nullptr) return 0;
-    return p->wp;
-}
-
-
-char* ReadPipe(pipehndl hndl, size_t* out_length, bool null_terminate){
-    pipe* p = GetPipe(hndl);
-    if (p == nullptr) return nullptr;
-
-    while (p->writting) { __asm__ volatile ("pause"); }
-
-    p->reading = true;
-    int rp = GetReadPointer(hndl);
-    int wp = GetWritePointer(hndl);
-
-    if (rp == wp) {
-        p->reading = false;
-        return nullptr;
-    }
-    if (rp < wp){
-        int amount_to_read = wp - rp;
-        char* alloc = new char[amount_to_read + 1];
-
-        memcpy(alloc, p->buffer + rp, amount_to_read * sizeof(char));
-        alloc[amount_to_read] = '\0';
-
-        rp = wp;
-        p->reading = false;
-        p->rp = rp;
-        *out_length = amount_to_read;
-        return alloc;
-    }else{
-        int amount_to_read = (0x1000 - rp) + wp;
-
-        char* alloc = new char[amount_to_read + 1];
-
-        memcpy(alloc, p->buffer + rp, 0x1000 - rp);
-        memcpy(alloc + (0x1000 - rp), p->buffer, wp);
-        
-        if (null_terminate) alloc[amount_to_read] = '\0';
-        rp = wp;
-        p->reading = false;
-        p->rp = rp;
-        *out_length = amount_to_read;
-        return alloc;
+int WritePipe(vnode_t* pipe, const char* data, size_t length){
+    pipe_data* p = (pipe_data*)pipe->fs_data;
+    if (p->buffer_size < (length + p->offset_in_buffer)){
+        size_t new_size = p->buffer_size + (length * 2);
+        char* d = new char[new_size];
+        if (p->data != nullptr) {
+            memcpy(d, p->data, p->buffer_size);
+            delete[] p->data;
+        }
+        p->data = d;
+        p->buffer_size = new_size;
     }
 
-    p->reading = false;
-    return nullptr;
+    memcpy(p->data + p->offset_in_buffer, data, length);
+    p->offset_in_buffer += length;
+    pipe->data_available = true;
+    return length;
 }
 
-void WritePipe(pipehndl hndl, const char* wr, size_t length) {
-    pipe* p = GetPipe(hndl);
-    if (p == nullptr) return;
-    while (p->reading) { __asm__ volatile ("pause"); }
+char* ReadPipe(vnode_t* pipe, size_t* length){
+    pipe_data* p = (pipe_data*)pipe->fs_data;
+    while (p->offset_in_buffer == 0) __asm__("pause");
 
-    p->writting = true;
+    size_t bsz = p->offset_in_buffer;
+    char* out = new char[bsz];
+    memcpy(out, p->data, bsz);
+    p->offset_in_buffer = 0;
+    *length = bsz;
 
-    while (length > 0){
-        if (p->wp >= 0x1000) p->wp = 0;
+    pipe->data_available = false;
 
-        p->buffer[p->wp] = *wr;
-        p->wp++;
-        length--;
-        wr++;
+    return out;
+}
+
+void* default_pipe_load(size_t* cnt, vnode* this_node){
+    return ReadPipe(this_node, cnt);
+}
+
+int default_pipe_write(const char* data, size_t length, vnode_t* this_node){
+    return WritePipe(this_node, data, length);
+}
+
+vnode_t* CreatePipe(const char* name, vnode_t* parent){
+    vnode_t* node = new vnode_t;
+    
+    node->type == VNODE_TYPE::VPIPE;
+    node->fs_data = malloc(sizeof(pipe_data));
+    node->ops.load = default_pipe_load;
+    node->ops.write = default_pipe_write;
+    node->parent = parent;
+
+    if (parent){
+        parent->children[parent->num_of_children] = node;
+        parent->num_of_children++;
     }
+    memset(node->fs_data, 0, sizeof(pipe_data));
 
-    p->writting = false;
+    strcpy(node->name, (char*)name);
+
+    return node;
 }
 
-void ClearPipe(pipehndl hndl){
-    pipe* p = GetPipe(hndl);
-    if (p == nullptr) return;
-
-    p->wp = 0;
-    p->rp = 0;
-    p->reading = false;
-    p->writting = false;
-    memset(p->buffer, 0, 0x1000);
+void ClosePipe(vnode_t* pipe){
+    pipe_data* data = (pipe_data*)pipe->fs_data;
+    if (data->data != nullptr) free(data->data);
+    free(data);
+    delete pipe; 
 }

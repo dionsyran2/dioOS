@@ -2,31 +2,7 @@
 #include <drivers/serial.h>
 #include <BasicRenderer.h>
 #include <scheduling/task/scheduler.h>
-/*
-void panic(const char* panicMsg, const char* debug){
-    asm ("cli");
-    //taskScheduler::disableSwitch = true;
-    globalRenderer->Set(true);
-    for (int t = 0; t > 1000; t++);
-    globalRenderer->Clear(0x0f0024);
-
-    globalRenderer->cursorPos.X = 0;
-    globalRenderer->cursorPos.Y = 0;
-
-    serialPrint(COM1, "Kernel Panic\n\n\r");
-    serialPrint(COM1, panicMsg);
-    serialPrint(COM1, "\n\rDEBUG::\n\r");
-
-
-    //kprintf("%s", debug);
-    serialPrint(COM1, debug);
-    Sleep(15000);
-
-    Restart();
-    
-    while(1) asm volatile ("hlt");
-}*/
-
+#include <kernel.h>
 
 void panic(const char* panicMsg, const char* debug){
     asm ("cli");

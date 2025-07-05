@@ -1,9 +1,10 @@
-#include "kernel.h"
+#include <kernel.h>
 #define BOOT_SCREEN
 #include <boot_screen.h>
 #include <scheduling/lock/spinlock.h>
 #include <VFS/vfs.h>
-
+#include <scheduling/task/scheduler.h>
+#include <userspace/userspace.h>
 
 /* AP MAIN */
 /*
@@ -31,21 +32,20 @@ extern "C" void _main(uint32_t magic, multiboot_info* mb_info_addr){
     InitKernel(magic, mb_info_addr);
     flush_tss();
 
-    taskScheduler::InitializeScheduler(5);    
+    task_scheduler::init();   
+     
 
-    taskScheduler::task_t* task = taskScheduler::CreateTask((void*)SecondaryKernelInit, 0, false);
-    task->setName("Kernel Initialization");
-    task->valid = true;
+    task_t* task = task_scheduler::create_process("Kernel Initialization", SecondaryKernelInit);
+    task_scheduler::mark_ready(task);
 
-    taskScheduler::task_t* task2 = taskScheduler::CreateTask((void*)bootTest, 0, false);
-    task2->setName("Boot animation");
-    task2->valid = true;
+    task_t* task2 = task_scheduler::create_process("Boot animation", bootTest);
+    task_scheduler::mark_ready(task2);
+
     //SecondaryKernelInit();
 
     setup_syscalls();
-    taskScheduler::SwitchTask(0, 0); // Initiate the scheduler... this will make it run the first task.
-
-
+    task_scheduler::disable_scheduling = false;
+    task_scheduler::run_next_task(0, 0);
     //(shouldn't return to _main, since control has been handed over to the scheduler... and _main is not a scheduled task)
     
     kprintf("Returned to _main\n");

@@ -36,37 +36,33 @@ int get_days_in_month(int month, int year) {
 }
 
 uint64_t to_unix_timestamp(int sec, int min, int hour, int day, int month, int year) {
-    // Year must be full (e.g., 2025)
     int y = year;
     int m = month;
     int d = day;
 
-    // Days since epoch
     uint64_t days = 0;
 
-    // Add days for each year
+    // Add days for each year since 1970
     for (int i = 1970; i < y; ++i)
         days += is_leap_year(i) ? 366 : 365;
 
-    // Add days for each month
-    for (int i = 1; i < m; ++i) {
-        days += get_days_in_month(i - 1, year);
-        if (i == 2 && is_leap_year(y))
-            days += 1; // February in leap year
-    }
+    // Add days for each month in the current year
+    for (int i = 1; i < m; ++i)
+        days += get_days_in_month(i, y);  // assumes 1-based month
 
-    days += d - 1; // Current month days
+    // Add days in the current month (excluding today)
+    days += d - 1;
 
     // Convert to seconds
     return ((days * 24 + hour) * 60 + min) * 60 + sec;
 }
+
 RTC::rtc_time_t* c_time;
 void update_time(){
     //need to fix the lapic timer calibration so it doesnt drift off
     RTC::rtc_time_t time = RTC::read_rtc_time();
-    if (c_time != nullptr){
-        memcpy(c_time, &time, sizeof(RTC::rtc_time_t));
-    }
+    if (c_time == nullptr) c_time = new RTC::rtc_time_t();
+    memcpy(c_time, &time, sizeof(RTC::rtc_time_t));
     
     return;
     TIME_SECONDS++;

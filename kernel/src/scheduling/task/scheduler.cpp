@@ -1,66 +1,17 @@
 #include <scheduling/task/scheduler.h>
 #include <syscalls/syscalls.h>
 #include <kernel.h>
+#include <userspace/userspace.h>
 
-namespace taskScheduler{
-    bool disableSwitch = false;
-    tasklist_t* tasklists;
-    uint8_t numOfTaskLists;
-    uint64_t procID = 0;
+task_t* task_list;
+task_t* idle_task;
+task_t* current_task;
 
-    void IdleTask(){
-        while(1);//sys_task_sleep_cpp(1000);
-    }
+size_t current_pid = 0;
+size_t current_tid = 100000;
+void* scheduler_stack = nullptr;
 
-    void task_t::decreaseCounter(){
-        if (this->counter > 0) this->counter--;
-    }
-    
-    uint64_t task_t::getCounter(){
-        return this->counter;
-    }
-    void task_t::resetCounter(){
-        if (reducedCounter == true){
-            this->counter = 5;
-        }else{
-            this->counter = TASK_SCHEDULER_COUNTER_DEFAULT;
-        }
-    }
-
-    bool task_t::isUnblocked(){
-        /*switch (this->blockType){
-            case 1: //Sleep
-                return (GetAPICTick() > this->block) ? true : false;
-            case 2: //IO Wait
-                io_wait(); //idk how to implement that yet
-                return true;
-            default:
-                return true;
-        }*/
-       return (this->blockType == 1) ? (GetAPICTick() > this->block)
-     : (this->blockType == 2) ? true // assuming IO always unblocks
-     : true;
-    }
-
-    void task_t::setName(char* name){
-        strcpy((char*) &this->task_name, name);
-    }
-
-    void task_t::initialize(void* function){
-        this->function = (func_ptr)function;
-        this->stack = (uint64_t)GlobalAllocator.RequestPages((4 * 1024 * 1024) / 0x1000);
-        memset((void*)this->stack, 0, (4 * 1024 * 1024));
-        this->kernelStack = (uint64_t)GlobalAllocator.RequestPages((4 * 1024 * 1024) / 0x1000);
-        memset((void*)this->kernelStack, 0, (4 * 1024 * 1024));
-
-        this->state = Stopped;
-        this->resetCounter();
-        this->setName("Unnamed Task");
-        this->pid = procID;
-        procID++;
-    }
-
-    /*
+/*
     +---------------------+  <-- rsp (stack pointer) on entry
     | argc (int)          |  <-- number of arguments
     +---------------------+
@@ -90,258 +41,737 @@ namespace taskScheduler{
     +---------------------+
     | env strings         |  <-- actual env variable strings
     +---------------------+
-    */
+*/
 
 
-    void setup_stack(task_t* task, int argc, char* argv[], char* envp[], auxv_t auxv_entries[]){
-        uint8_t* stack_top = (uint8_t*)(task->stack + (4 * 1024 * 1024)); // top of stack
-        uint8_t* sp = stack_top;
-        uint8_t* auxv_addr = sp;
-        PUSH_TO_STACK(sp, uint64_t, 0);
-        PUSH_TO_STACK(sp, uint64_t, AT_NULL);
-        for (int i = 0;; i++){
-            auxv_t auxv = auxv_entries[i];
-            if (auxv.a_type == AT_NULL) break;
-            PUSH_TO_STACK(sp, uint64_t, auxv.a_val);
-            PUSH_TO_STACK(sp, uint64_t, auxv.a_type); // MOVE 16 bytes per entry
-            //kprintf("T: %d val: %llx\n", auxv.a_type, auxv.a_val);
-        }
+void setup_stack(task_t* task, int argc, char* argv[], char* envp[], auxv_t auxv_entries[]){
+    uint8_t* stack_top = (uint8_t*)(task->stack + TASK_SCHEDULER_DEFAULT_STACK_SIZE); // top of stack
+    uint8_t* sp = stack_top;
+    uint8_t* auxv_addr = sp;
 
-        //memcpy(auxv_addr, auxv_entries, bytes);
+    // they start at 1 to account for the null entry
+    int num_of_env = 1;
+    for (int i = 0; envp[i] != nullptr; i++) num_of_env++;
+    int num_of_auxv = 1;
+    for (int i = 0; auxv_entries[i].a_type != AT_NULL; i++) num_of_auxv++;
 
-        PUSH_TO_STACK(sp, uint64_t, 0); // NULL ENVP
+    // Add padding to ensure 16 byte alignment
 
-        for (int i = 0;; i++){
-            char* env = envp[i];
-            if (env == nullptr) break;
-            int len = strlen(env);
-            char* str = new char[len + 1];
-            strcpy(str, env);
-            PUSH_TO_STACK(sp, uint64_t, (uint64_t)str); // ENVP
-        }
-        task->rdx = (uint64_t)sp;
+    int total_size = (num_of_auxv * 16) + (num_of_env * 8) + ((argc + 1) * 8) + 8;
+    serialf("Aligned to 0x10: %s %d\n\r", (total_size & 0xF) == 0 ? "Yes" : "No", total_size);
+    if ((total_size & 0xF) != 0) PUSH_TO_STACK(sp, uint64_t, 0); 
 
-        PUSH_TO_STACK(sp, uint64_t, 0); // NULL argv
-        for (int i = argc - 1; i >= 0; i--){
-            char* arg = argv[i];
-            int len = strlen(arg);
-            char* str = new char[len + 1];
-            strcpy(str, arg);
-            PUSH_TO_STACK(sp, uint64_t, (uint64_t)str);
-        }
-        task->rsi = (uint64_t)sp;
-
-        PUSH_TO_STACK(sp, uint64_t, argc); // ARGC
-        task->rdi = argc;
-
-        task->rsp = (uint64_t)sp;
+    
+    PUSH_TO_STACK(sp, uint64_t, 0);
+    PUSH_TO_STACK(sp, uint64_t, AT_NULL);
+    for (int i = 0;; i++){
+        auxv_t auxv = auxv_entries[i];
+        if (auxv.a_type == AT_NULL) break;
+        PUSH_TO_STACK(sp, uint64_t, auxv.a_val);
+        PUSH_TO_STACK(sp, uint64_t, auxv.a_type); // MOVE 16 bytes per entry
+        //kprintf("T: %d val: %llx\n", auxv.a_type, auxv.a_val);
     }
 
-    task_t* CreateTask(void* function, uint8_t priority, bool user){
-        if (priority > (numOfTaskLists - 1)) priority = numOfTaskLists - 1;
+    //memcpy(auxv_addr, auxv_entries, bytes);
+
+    PUSH_TO_STACK(sp, uint64_t, 0); // NULL ENVP
+
+    for (int i = 0;; i++){
+        char* env = envp[i];
+        if (env == nullptr) break;
+        int len = strlen(env);
+        char* str = new char[len + 1];
+        strcpy(str, env);
+        PUSH_TO_STACK(sp, uint64_t, (uint64_t)str); // ENVP
+    }
+    task->rdx = (uint64_t)sp;
+
+    PUSH_TO_STACK(sp, uint64_t, 0); // NULL argv
+    for (int i = argc - 1; i >= 0; i--){
+        char* arg = argv[i];
+        int len = strlen(arg);
+        char* str = new char[len + 1];
+        strcpy(str, arg);
+        PUSH_TO_STACK(sp, uint64_t, (uint64_t)str);
+    }
+    task->rsi = (uint64_t)sp;
+
+    PUSH_TO_STACK(sp, uint64_t, argc); // ARGC
+    task->rdi = argc;
+
+    task->rsp = (uint64_t)sp;
+}
+
+
+int get_available_fd(task_t* task){
+    for (int i = 3; i < 100; i++){
+        bool found = false;
+        open_fd_t* fd = task->open_fds;
+        while(fd != nullptr){
+            if (fd->fd == (uint64_t)i){
+                found = true;
+                break;
+            }
+            fd = fd->next;
+        }
+
+        if (!found) return i;
+    }
+    return -1;
+}
+
+
+open_fd_t* task_t::open_node(vnode_t* node, int id){
+    int desc_id = id;
+    if (id < 0) desc_id = get_available_fd(this);
+
+    (*open_file_descriptors) += 1;
+
+
+    open_fd_t* fd = new open_fd_t;
+    memset(fd, 0, sizeof(open_fd_t));
+    fd->node = node;
+    fd->owner = this;
+    fd->fd = desc_id;
+
+    if (open_fds == nullptr){
+        open_fds = fd;
+        return fd;
+    }
+
+    open_fd_t* cfd = open_fds;
+    while(1){
+        if (cfd->next == nullptr){
+            cfd->next = fd;
+            fd->previous = cfd;
+            break;
+        }
+        cfd = cfd->next;
+    }
+    
+    return fd;
+}
+
+void task_t::close_fd(open_fd_t* fd){
+    if (fd == nullptr) return;
+
+    if (fd == open_fds){
+        task_t* nt = task_list;
+        while(nt != nullptr){
+            if (nt->pid == pid){
+                if (nt->open_fds == open_fds){
+                    nt->open_fds = fd->next;
+                }
+            }
+            nt = nt->next;
+        }
+    }
+
+    if (fd->previous) fd->previous->next = fd->next;
+    if (fd->next) fd->next->previous = fd->previous;
+
+    delete fd;
+}
+
+open_fd_t* task_t::get_fd(uint64_t fd){
+    open_fd_t* ofd = open_fds;
+    while(ofd != nullptr){
+        if (ofd->fd == fd){
+            break;
+        }
+        ofd = ofd->next;
+    }
+
+    return ofd;
+}
+
+
+
+void task_t::exit(int code){
+    this->exit_code = code;
+    this->state = task_state_t::ZOMBIE;
+    serialf("EXIT %d pid: %d\n\r", code, pid);
+    if (ppid != -1){
+        task_t* task = task_list;
+        while (task != nullptr){
+            if (task->pid == ppid && task->block == WAITING_ON_CHILD && (task->block_info == -1 || task->block_info == pid)){
+                task_scheduler::unblock_task(task);
+            }
+            task = task->next;
+        }
+    }
+
+    task_scheduler::disable_scheduling = false;
+    while(1){
+        asm ("sti");
+        asm ("pause");
+    }
+}
+
+namespace task_scheduler{
+    bool disable_scheduling = true;
+
+    void idle(){
+        while(1) {
+            asm ("sti");
+            __asm__("pause");
+        }
+    }
+
+    
+    uint64_t allocate_stack(){
+        return (uint64_t)GlobalAllocator.RequestPages(TASK_SCHEDULER_DEFAULT_STACK_SIZE_IN_PAGES);
+    }
+
+    void free_stack(void* pages){
+        GlobalAllocator.FreePages(pages, TASK_SCHEDULER_DEFAULT_STACK_SIZE_IN_PAGES);
+    }
+
+    void block_task(task_t* task, block_type type, int data){
+        serialf("BLOCKING %d\n\r", data);
+        task->block = type;
+        task->block_info = data;
+        task->state = BLOCKED;
+        task->counter = 0;
+        __asm__ ("int $0x23"); // trigger an apic timer interrupt, to make the scheduler swap tasks
+    }
+    
+    void unblock_task(task_t* task){
+        task->state = PAUSED;
+        task->counter = TASK_SCHEDULER_COUNTER_DEFAULT;
+    }
+
+    void init(){
+        scheduler_stack = (void*)(allocate_stack() + TASK_SCHEDULER_DEFAULT_STACK_SIZE);
+        idle_task = create_process("IDLE", idle);
+        mark_ready(idle_task);
+    }
+
+    task_t* get_current_task(){
+        return current_task;
+    }
+
+    void add_task(task_t* task){
+        if (task_list == nullptr){
+            task_list = task;
+            return;
+        }
+
+        task_t* ct = task_list;
+        while(1){
+            if (ct->next == nullptr){
+                ct->next = task;
+                task->previous = ct;
+                break;
+            }
+            
+            ct = ct->next;
+        }
+    }
+
+    void remove_task(task_t* task){
+        if (task_list == task){
+            task_list = task->next;
+            if (task->next) task->next->previous = nullptr;
+            return;
+        }
+
+        if (task->previous) task->previous->next = task->next;
+        if (task->next) task->next->previous = task->previous;
+
+        // free any allocated memory blah blah blah
+    }
+
+    task_t* create_process(
+        const char* name, function entry, task_t* parent, bool ptm, vnode_t* tty,
+        char* envp, int uid, int gid, int euid, int egid, uint64_t rdi,
+        uint64_t rsi, uint64_t rdx, uint64_t flags, vnode_t* cwd, vnode_t* root,
+        session::session_t* session
+    ){
         task_t* task = new task_t;
+        memset(task, 0, sizeof(task_t));
+
+        task->name = name;
         
+        task->entry = entry;
+
+        task->pid = current_pid;
+        current_pid++;
+
+        if (parent != nullptr){
+            task->ppid = parent->pid;
+        }else {
+            task->ppid = task->pid;
+        }
+
+        task->tid = task->pid;
+        task->pgid = task->pid;
+        
+        task->gid = gid;
+        task->uid = uid;
+        task->egid = egid == -1 ? gid : egid;
+        task->euid = euid == -1 ? uid : euid;
+
+        task->kstack = allocate_stack();
+        task->syscall_stack = allocate_stack();
+        task->stack = allocate_stack();
+        task->sig_stack = (uint64_t)GlobalAllocator.RequestPages(4);
+
+
         task->brk = BRK_DEFAULT_BASE;
         task->brk_end = BRK_DEFAULT_BASE;
-        task->initialize(function);
-        task->userspace = user;
-        task->tasklist = priority;
-        task->ptm = nullptr;
-        task->tmp_PML4 = NULL;
-        task->Context = nullptr;
-        tasklists[priority].tasks[tasklists[priority].numOfTasks] = task;
-        tasklists[priority].numOfTasks++;
+
+        task->rmap_ptr = new uint64_t(RMAP_DEFAULT_BASE);
+
+        task->rdi = rdi;
+        task->rsi = rsi;
+        task->rdx = rdx;
+
+        task->flags = flags;
+
+        task->tty = tty;
+
+        int* newInt = new int(0);
+
+        task->open_file_descriptors = newInt;
+
+
+
+        if (cwd == nullptr) cwd = vfs::get_root_node();
+        task->nd_cwd = cwd;
+
+        if (root == nullptr) root = vfs::get_root_node();
+        task->nd_root = root;
+
+        task->counter = TASK_SCHEDULER_COUNTER_DEFAULT;
+
+        if (ptm){
+            PageTableManager* pt = new PageTableManager((PageTable*)GlobalAllocator.RequestPage());
+            memset(pt->PML4, 0, 0x1000);
+            pt->MapMemory(pt->PML4, pt->PML4);
+            globalPTM.ClonePTM(pt);
+            task->ptm = pt;
+        }
+
+        task->session = session;
+        
+        add_task(task);
         return task;
     }
 
-    PageTableManager* task_t::CreatePageTableMgr(){
-        ptm = new PageTableManager((PageTable*)GlobalAllocator.RequestPage());
-        memset(ptm->PML4, 0, 0x1000);
-        ptm->MapMemory(ptm->PML4, ptm->PML4);
-
-        globalPTM.ClonePTM(ptm);
-        return ptm;
-    }
-
-    void RemoveTask(task_t* task){
-        if (task->valid == false) return;
-        if (task->stack != 0){
-            /*GlobalAllocator.FreePages((void*)task->stack, 10);
-            GlobalAllocator.FreePages((void*)task->kernelStack, 10);
-            if (task->ptm != nullptr){
-                GlobalAllocator.FreePage(task->ptm->PML4);
-                free(task->ptm);
-            }*/
-        }
-        
-        int index = 0;
-        for (int i = 0; i < tasklists[task->tasklist].numOfTasks; i++){
-            if (tasklists[task->tasklist].tasks[i] == task){
-                index = i;
-                break;
-            }
+    task_t* get_process(uint16_t pid){
+        task_t* task = task_list;
+        while(task != nullptr){
+            if (task->pid == pid) return task; // return the main thread of that process
+            task = task->next;
         }
 
-        for (int i = index; i < tasklists[task->tasklist].numOfTasks; i++){
-            tasklists[task->tasklist].tasks[i] = tasklists[task->tasklist].tasks[i + 1];
-        }
-        tasklists[task->tasklist].numOfTasks--;
-        tasklists[task->tasklist].tasks[tasklists[task->tasklist].numOfTasks] = nullptr;
-        task->valid = false;
-    }
-
-    void ResetAllCounters(){
-        for (int p = 0; p < numOfTaskLists; p++){
-            tasklist_t* list = &tasklists[p];
-            uint16_t count = 0;
-            for (int i = 0; i < list->numOfTasks; i++){
-                task_t* task = list->tasks[i];
-
-                if (task->valid == false) continue;
-                count++;
-                task->resetCounter();
-
-            }
-        }
-    }
-
-    task_t* FindNextTask(){
-        for (int p = 0; p < numOfTaskLists; p++){
-            tasklist_t* list = &tasklists[p];
-            
-            for (int i = 0; i < list->numOfTasks; i++){
-                task_t* task = list->tasks[i];
-
-                if (task->valid == false) continue;
-                if (task->state == Blocked && task->isUnblocked()){
-                    return task;
-                }
-                if (task->getCounter() > 0) return task; //if the counter is not 0, it means that the task has not been run yet
-            }
-        }
-        
         return nullptr;
     }
 
-    task_t* GetNextTask(){
-        task_t* task = nullptr;
-        while (true){
-            task = FindNextTask();
-            if (!task){
-                ResetAllCounters();
-                continue;
-            }
-            if (task->exit){
-                RemoveTask(task);
-                continue;
-            }
-            break;
+    task_t* fork_process(task_t* process, function entry){
+        if (process == nullptr) return nullptr; // :)
+
+        task_t* task = new task_t;
+        memset(task, 0, sizeof(task_t));
+
+        task->name = process->name;
+        
+        task->entry = entry;
+
+        task->pid = current_pid;
+        current_pid++;
+
+        task->tid_address = process->tid_address;
+
+        task->ppid = process->pid;
+
+        task->tid = task->pid;
+        task->pgid = task->pid;
+        
+        task->gs_base = process->gs_base;
+        task->fs_base = process->fs_base;
+
+        task->gid = process->pid;
+        task->uid = process->uid;
+        task->egid = process->egid;
+        task->euid = process->euid;
+
+        task->kstack = allocate_stack();
+        task->syscall_stack = allocate_stack();
+        task->stack = allocate_stack();
+        task->sig_stack = (uint64_t)GlobalAllocator.RequestPages(4);
+
+        task->brk = process->brk;
+        task->brk_end = process->brk_end;
+
+        task->rmap_ptr = process->rmap_ptr;
+
+        task->tty = process->tty;
+
+        int* newInt = new int(*process->open_file_descriptors);
+
+        task->open_file_descriptors = newInt;
+
+        task->nd_cwd = process->nd_cwd;
+
+        task->nd_root = process->nd_root;
+
+        task->counter = TASK_SCHEDULER_COUNTER_DEFAULT;
+
+        PageTableManager* pt = new PageTableManager((PageTable*)GlobalAllocator.RequestPage());
+        memset(pt->PML4, 0, 0x1000);
+        process->ptm->ClonePTM(pt);
+        task->ptm = pt;
+
+        task->session = process->session;
+        
+        // clone the stack
+        memcpy_simd((void*)task->stack, (void*)process->stack, TASK_SCHEDULER_DEFAULT_STACK_SIZE);
+        memcpy_simd((void*)task->kstack, (void*)process->kstack, TASK_SCHEDULER_DEFAULT_STACK_SIZE);
+        memcpy_simd((void*)task->syscall_stack, (void*)process->syscall_stack, TASK_SCHEDULER_DEFAULT_STACK_SIZE);
+
+        for (int i = 0; i < TASK_SCHEDULER_DEFAULT_STACK_SIZE_IN_PAGES; i++){
+            pt->MapMemory((void*)(process->stack + (i * 0x1000)), (void*)(task->stack + (i * 0x1000)));
+            pt->MapMemory((void*)(process->kstack + (i * 0x1000)), (void*)(task->kstack + (i * 0x1000)));
+            pt->MapMemory((void*)(process->syscall_stack + (i * 0x1000)), (void*)(task->syscall_stack + (i * 0x1000)));
         }
+
+        task->stack = process->stack;
+        task->kstack = process->kstack;
+        task->syscall_stack = process->syscall_stack;
+
+
+
+        // clone the ofds
+        open_fd_t* fd = process->open_fds;
+        while (fd != nullptr){
+            open_fd_t* nfd = task->open_node(fd->node, fd->fd);
+            nfd->flags = fd->flags;
+            nfd->other_end = fd->other_end;
+
+            fd = fd->next;
+        }
+
+
+        add_task(task);
         return task;
     }
 
-    void InitializeScheduler(uint8_t numOfPriotities){
-        void* buffer = GlobalAllocator.RequestPages(((sizeof(tasklist_t) * numOfPriotities) / 0x1000) + 1);
-        memset(buffer, 0, (sizeof(tasklist_t) * numOfPriotities) + 0x1000);
-        tasklists = (tasklist_t*)buffer;
-        numOfTaskLists = numOfPriotities;
+    task_t* create_thread(
+        task_t* process, function entry, int uid, int gid, int euid, int egid, uint64_t rdi,
+        uint64_t rsi, uint64_t rdx, uint64_t flags
+    ){
+        if (process == nullptr) return nullptr; // :)
 
-        task_t* idle = CreateTask((void*)&IdleTask, numOfPriotities - 1, false);
-        idle->reducedCounter = true;
-        idle->setName("Idle Task");
+        task_t* task = new task_t;
+        memset(task, 0, sizeof(task_t));
+
+        //task->name = process->name;
+        
+        task->entry = entry;
+
+        task->ppid = process->pid;
+
+        task->pid = process->pid;
+
+        task->tid = current_tid;
+
+        task->pgid = process->pgid; // process group id
+        
+        current_tid++;
+        
+        task->gid = gid;
+        task->uid = uid;
+        task->egid = egid == -1 ? gid : egid;
+        task->euid = euid == -1 ? uid : euid;
+
+        task->kstack = allocate_stack();
+        task->stack = allocate_stack();
+        task->syscall_stack = allocate_stack();
+        task->sig_stack = (uint64_t)GlobalAllocator.RequestPages(4);
+
+        task->brk = BRK_DEFAULT_BASE;
+        task->brk_end = BRK_DEFAULT_BASE;
+
+        task->rmap_ptr = process->rmap_ptr;
+
+        task->rdi = rdi;
+        task->rsi = rsi;
+        task->rdx = rdx;
+
+        task->flags = flags;
+
+        task->nd_cwd = process->nd_cwd;
+        task->nd_root = process->nd_root;
+
+        task->open_file_descriptors = process->open_file_descriptors;
+        task->open_fds = process->open_fds;
+
+        task->counter = TASK_SCHEDULER_COUNTER_DEFAULT;
+
+        task->tty = process->tty;
+        add_task(task);
+        
+
+        return task;
     }
 
-    task_t* currentTask = nullptr;
+    void mark_ready(task_t* task){
+        task->state = task_state_t::STOPPED;
+    }
 
-    extern "C" void RunCurrentTask(){
-        if (currentTask->ptm != nullptr){
-            if (currentTask->tmp_PML4 != NULL){
-                asm volatile ("mov %0, %%cr3" :: "r" (currentTask->tmp_PML4));
-            }else{
-                asm volatile ("mov %0, %%cr3" :: "r" (currentTask->ptm->PML4));
+
+    task_t* find_next_task(){
+        task_t* task = task_list;
+        while(task != nullptr){
+            if ((task->state != task_state_t::INTERRUPTED && task->state != task_state_t::DISABLED && task->state != task_state_t::BLOCKED && task->state != task_state_t::ZOMBIE) && task->counter > 0){
+                return task;
             }
+
+            task = task->next;
+        }
+        return nullptr;
+    }
+
+    void reset_counters(){
+        task_t* task = task_list;
+        while(task != nullptr){
+            if ((task->state != task_state_t::INTERRUPTED && task->state != task_state_t::DISABLED && task->state != task_state_t::BLOCKED && task->state != task_state_t::ZOMBIE)){
+                task->counter = TASK_SCHEDULER_COUNTER_DEFAULT;
+            }
+
+            task = task->next;
+        }
+    }
+
+    task_t* get_next_task(){
+        task_t* ret = find_next_task();
+        if (ret == nullptr){
+            reset_counters();
+            ret = find_next_task();
+        }
+
+        if (ret == nullptr){
+            idle_task->counter = TASK_SCHEDULER_COUNTER_DEFAULT;
+            return idle_task;
+        }
+
+        return ret;
+    }
+
+    void _exit_process(int pid, int code){
+        task_t* ctask = task_scheduler::get_current_task();
+
+        task_t* task = task_list;
+        bool marked_zombie = false;
+        while(task != nullptr){
+            if (task->pid == pid && task != ctask){
+                task->state = (marked_zombie && !(ctask && ctask->pid == pid))? DISABLED : ZOMBIE;
+                task->exit_code = code;
+                if (marked_zombie) remove_task(task);
+                if (!marked_zombie) marked_zombie = true;
+            }
+            task = task->next;
+        }
+
+        if (ctask && ctask->pid == pid){
+            ctask->exit(code);
+        }
+    }
+    void run_task(task_t* task);
+    void _check_for_pending_signals(task_t* task){
+        if (task->pending_signals == 0) return;
+        if (task->executing_a_handler) return; // a handler is already executing... let it finish (it has interrupted some other thread)
+        disable_scheduling = true;
+        uint64_t pending_signals = task->pending_signals;
+        int signal = 0;
+        while (pending_signals != 0){ // loop through all of the possible signals
+            if ((pending_signals & 1) == 0) { pending_signals >>= 1; signal++; continue;}; // continue if signal is not pending
+            serialf("SIGNAL %d\n\r", signal);
+            // signal pending
+            task_t* best_candidate = nullptr;
+            
+            // loop through all of the tasks,
+            // if it is in the same process
+            // and the flag is not set we set
+            // it as the best candidate.
+            // if it has a handler registered
+            // we will use that one
+
+            task_t* t = task_list;
+            bool masked = false;
+            while(t != nullptr){
+                serialf("T: %llx %s %d %d\n\r", t, t->name, t->pid, t->tid);
+                if (t->pid == task->pid && (t->signal_mask & (1 << signal)) == 0){
+                    serialf("SUCCESS\n\r");
+                    if (best_candidate != nullptr){
+                        masked = false;
+                        if (t->signals[signal].__sa_handler.sa_handler != nullptr) best_candidate = t;
+                        if (t->signals[signal].__sa_handler.sa_handler != (void*)-1) break; // use this task if it has a registered handler
+                    }else best_candidate = t;
+                }else{
+                    if (t != nullptr && t->pid == task->pid) masked = true;
+                }
+                t = t->next;
+            }
+
+            if ((!masked && best_candidate == nullptr) || best_candidate->signals[signal].__sa_handler.sa_handler == nullptr){ // if it is not masked and no handler is registered kill the process
+                _exit_process(task->pid, signal);
+            }else{
+                if (best_candidate->signals[signal].__sa_handler.sa_handler == (void*)-1 || best_candidate->signals[signal].__sa_handler.sa_handler == (void*)1) { pending_signals >>= 1; task->pending_signals &= ~(1UL << signal); continue;}; // ignore
+                // there is a registered handler
+                serialf("best candidate: %s %llx %llx\n\r", best_candidate->name, best_candidate, best_candidate->signals[signal].__sa_handler.sa_handler);
+                // make a new thread that runs the handler, with the same ids... mark it as a handler and disable the task.
+                // if the task == the one currently resuming set the counter to 0 and spin loop
+                // break to make that handler run.
+
+                task_t* ntask = create_process("SIGNAL HANDLER", (function)best_candidate->signals[signal].__sa_handler.sa_handler);
+                ntask->rdi = signal;
+
+                ntask->pid = best_candidate->pid;
+                ntask->tid = best_candidate->tid;
+
+                ntask->tid_address = best_candidate->tid_address;
+
+                ntask->ppid = best_candidate->pid;
+                ntask->pgid = best_candidate->pid;
+
+                ntask->gs_base = best_candidate->gs_base;
+                ntask->fs_base = best_candidate->fs_base;
+
+                ntask->gid = best_candidate->pid;
+                ntask->uid = best_candidate->uid;
+                ntask->egid = best_candidate->egid;
+                ntask->euid = best_candidate->euid;
+
+                ntask->brk = best_candidate->brk;
+                ntask->brk_end = best_candidate->brk_end;
+
+                ntask->rmap_ptr = best_candidate->rmap_ptr;
+
+                ntask->tty = best_candidate->tty;
+
+                ntask->nd_cwd = best_candidate->nd_cwd;
+                ntask->nd_root = best_candidate->nd_root;
+                ntask->counter = TASK_SCHEDULER_COUNTER_DEFAULT;
+                ntask->ptm = best_candidate->ptm;
+                ntask->session = best_candidate->session;
+                ntask->flags = TASK_CPL3;
+
+                ntask->open_fds = best_candidate->open_fds;
+                ntask->open_file_descriptors = best_candidate->open_file_descriptors;
+
+                ntask->is_signal_handler = true;
+                
+                //add_task(ntask);
+                mark_ready(ntask);
+
+                best_candidate->state = INTERRUPTED;
+                best_candidate->executing_a_handler = true;
+                task->pending_signals &= ~(1UL << signal);
+                disable_scheduling = false;
+                asm ("sti");
+                run_task(ntask);
+                break;
+            }
+
+            pending_signals >>= 1;
+            task->pending_signals &= ~(1UL << signal);
+            signal++;
+        }
+        asm ("sti");
+        disable_scheduling = false;
+    }
+
+    void run_task(task_t* task){
+        current_task = task;
+        _check_for_pending_signals(task);
+        if (task->ptm != nullptr){
+            asm volatile ("mov %0, %%cr3" :: "r" (task->ptm->PML4));
         }else{
             asm volatile ("mov %0, %%cr3" :: "r" (globalPTM.PML4));
         }
 
-        next_syscall_stack = currentTask->kernelStack + (4 * 1024 * 1024);
-        
-        // We dont need to save / load the user stack, since no interrupts will be fired during a syscall
+        write_msr(IA32_FS_BASE, task->fs_base);
+        write_msr(IA32_GS_BASE, task->gs_base);
 
-        if (currentTask->state == Paused || currentTask->state == Blocked){ 
-            /*if (currentTask->rsp > (currentTask->stack + (0x1000 * 10)) || currentTask->rsp < currentTask->stack){
-                kprintf("Invalid rsp!\nRSP: %llx\nRBP: %llx\nSTACK: %llx", currentTask->rsp, currentTask->rbp, currentTask->stack);
-                while(1);
-            }
-
-            if (currentTask->rbp > (currentTask->stack + (0x1000 * 10)) || currentTask->rbp < currentTask->stack){
-                kprintf("Invalid rbp!\nRSP: %llx\nRBP: %llx\nSTACK: %llx", currentTask->rsp, currentTask->rbp, currentTask->stack);
-                while(1);
-            }*/
-            asm volatile ("mov %0, %%rsp" :: "r" (currentTask->rsp));
-            asm volatile ("mov %0, %%rbp" :: "r" (currentTask->rbp)); //These are the stack values from the interrupt.
-
-            currentTask->state = Running;
-            asm volatile ("jmp %0" :: "r" ((uint64_t)run_task_asm));
-        }else{
-            if (currentTask->userspace){
-                RunTaskInUserMode(currentTask);
+        next_syscall_stack = task->syscall_stack + TASK_SCHEDULER_DEFAULT_STACK_SIZE;
+        user_syscall_stack = task->current_user_stack_ptr;
+        set_kernel_stack(task->kstack + TASK_SCHEDULER_DEFAULT_STACK_SIZE, cpu0_tss_entry);
+        if (task->state == task_state_t::STOPPED){ // brand new task
+            task->state = task_state_t::RUNNING;
+            if ((task->flags & TASK_CPL3) != 0){ // user mode
+                RunTaskInUserMode(task);
             }else{
                 asm volatile ("sti");
-                asm volatile ("mov %0, %%rsp" :: "r" (currentTask->rsp ? currentTask->rsp : currentTask->stack + (4 * 1024 * 1024)));
-                asm volatile ("mov %0, %%rdi" :: "r" (currentTask) : "rdi");
+                asm volatile ("mov %0, %%rsp" :: "r" (task->rsp ? task->rsp : task->stack + TASK_SCHEDULER_DEFAULT_STACK_SIZE));
+                asm volatile ("mov %0, %%rdi" :: "r" (task->rdi));
+                asm volatile ("mov %0, %%rsi" :: "r" (task->rsi));
+                asm volatile ("mov %0, %%rdx" :: "r" (task->rdx));
                 
-                currentTask->state = Running;
-                currentTask->function(currentTask->Context);
-
-                //task has ended (returned)
-                currentTask->exit = true;
+                if (!task->jmp) {
+                    task->entry();
+                }else{
+                    asm ("jmp *%0" :: "r" (task->entry));
+                }                
+                asm volatile ("sti");
+                current_task->exit(0);
                 while(1);
             }
-            
+        } else{ // resume the task
+            task->state = task_state_t::RUNNING;
+            asm volatile ("mov %0, %%rsp" :: "r" (task->rsp));
+            asm volatile ("mov %0, %%rbp" :: "r" (task->rbp)); //These are the stack values from the interrupt.
+
+            asm volatile ("jmp *%0" :: "r" ((uint64_t)run_task_asm));
         }
     }
 
-    task_t* k_regs = nullptr;
-
-    void SwitchTask(uint64_t rbp, uint64_t rsp){
-
-        if (k_regs == nullptr){
-            k_regs = new task_t;
-            memset(k_regs, 0, sizeof(task_t));
-            k_regs->valid = false;
-        };
-        
-        task_t* nextTask = GetNextTask();
-        if (currentTask != nullptr){
-            if (currentTask->valid){
-                //SaveCurrentTaskState();
-                currentTask->rbp = rbp;
-                currentTask->rsp = rsp;
-                currentTask->state = Paused;
-
-                if (currentTask->ptm != nullptr){
-                    asm volatile ("mov %%cr3, %0" : "=r" (currentTask->tmp_PML4));
-                }
-            };
-            
-        }
-        currentTask = nextTask;
-        set_kernel_stack(nextTask->kernelStack + (4 * 1024 * 1024), cpu0_tss_entry);
-        RunCurrentTask();
-
-        while (1);
-        
+    void save_current_task(uint64_t rbp, uint64_t rsp){
+        current_task->rbp = rbp;
+        current_task->rsp = rsp;
+        current_task->current_user_stack_ptr = user_syscall_stack;
     }
 
-    void SchedulerTick(uint64_t rbp, uint64_t rsp){
-        if (currentTask != nullptr){
-            if (currentTask->valid == false) return;
-            if (disableSwitch) return;
-            currentTask->decreaseCounter();
-            if (currentTask->getCounter() <= 0){
-                SwitchTask(rbp, rsp);
+    void run_next_task(uint64_t rbp, uint64_t rsp){
+        asm volatile ("mov %0, %%rsp" :: "r" (scheduler_stack));
+        asm ("cli");
+        task_t* next_task = get_next_task();
+
+        if (current_task){
+            save_current_task(rbp, rsp);
+        }
+        run_task(next_task);
+    }
+
+
+    void tick(uint64_t rbp, uint64_t rsp){
+        if (disable_scheduling) return;
+
+        if (current_task == nullptr) return;
+
+        if (current_task->counter == 0) return run_next_task(rbp, rsp);
+
+        current_task->counter--;
+    }
+
+
+    task_t** get_children(int parent, size_t* length){
+        task_t** tasks = new task_t*[25];
+        size_t off = 0;
+
+        task_t* ctask = task_list;
+        while(ctask != nullptr){
+            if (ctask->ppid == parent && ctask->state != DISABLED && ctask->pid != parent){
+                tasks[off] = ctask;
+                off++;
             }
+            ctask = ctask->next;
         }
+
+        *length = off;
+        return tasks;
     }
+
 }

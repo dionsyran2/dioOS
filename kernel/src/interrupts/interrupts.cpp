@@ -56,14 +56,24 @@ __attribute__((interrupt)) void PageFault_Handler(InterruptFrameWithError* frame
     strcat(debug, "Return address: ");
     strcat(debug, toHString(frame->rip));
 
-    if (taskScheduler::currentTask != nullptr){
+    asm ("cli");
+    task_t* ctask = task_scheduler::get_current_task();
+    if (ctask){
+        serialf("%s \n\r", debug);
+        ctask->exit(128 + SIGSEGV); // terminate the task
+    }
+
+
+    if (ctask != nullptr){
         strcat(debug, "\nCurrent Task: ");
-        strcat(debug, taskScheduler::currentTask->task_name);
+        strcat(debug, ctask->name);
         strcat(debug, "\nTask state: ");
         strcat(debug, 
-            taskScheduler::currentTask->state == taskScheduler::task_state_t::Blocked ? "Blocked" :
-            taskScheduler::currentTask->state == taskScheduler::task_state_t::Paused ? "Paused" :
-            taskScheduler::currentTask->state == taskScheduler::task_state_t::Running ? "Running" :
+            ctask->state == task_state_t::BLOCKED ? "Blocked" :
+            ctask->state == task_state_t::PAUSED ? "Paused" :
+            ctask->state == task_state_t::RUNNING ? "Running" :
+            ctask->state == task_state_t::ZOMBIE ? "Zombie" :
+            ctask->state == task_state_t::DISABLED ? "Disabled" :
             "Stopped"
         );
     }
@@ -78,6 +88,11 @@ __attribute__((interrupt)) void DoubleFault_Handler(interrupt_frame* frame){
 
 
 __attribute__((interrupt)) void GPFault_Handler(InterruptFrameWithError* frame){
+    uint64_t r12 = 0;
+    asm ("mov %%r12, %0" : "=r" (r12));
+    serialf("R12: %llx/n/r\n", r12);
+
+
     HaltExecution();
     char* debug = (char*)GlobalAllocator.RequestPage();
     memset(debug, 0, 0x1000);
@@ -87,18 +102,27 @@ __attribute__((interrupt)) void GPFault_Handler(InterruptFrameWithError* frame){
     strcat(debug, toHString(frame->error_code));
     strcat(debug, "\nRETURN ADDRESS: ");
     strcat(debug, toHString((uint64_t)frame->rip));
-
-    if (taskScheduler::currentTask != nullptr){
+    
+    asm ("cli");
+    task_t* ctask = task_scheduler::get_current_task();
+    if (ctask){
+        serialf("%s \n\r", debug);
+        ctask->exit(128 + SIGSEGV); // terminate the task
+    }
+    if (ctask != nullptr){
         strcat(debug, "\nCurrent Task: ");
-        strcat(debug, taskScheduler::currentTask->task_name);
+        strcat(debug, ctask->name);
         strcat(debug, "\nTask state: ");
         strcat(debug, 
-            taskScheduler::currentTask->state == taskScheduler::task_state_t::Blocked ? "Blocked" :
-            taskScheduler::currentTask->state == taskScheduler::task_state_t::Paused ? "Paused" :
-            taskScheduler::currentTask->state == taskScheduler::task_state_t::Running ? "Running" :
+            ctask->state == task_state_t::BLOCKED ? "Blocked" :
+            ctask->state == task_state_t::PAUSED ? "Paused" :
+            ctask->state == task_state_t::RUNNING ? "Running" :
+            ctask->state == task_state_t::ZOMBIE ? "Zombie" :
+            ctask->state == task_state_t::DISABLED ? "Disabled" :
             "Stopped"
         );
     }
+    
     
     debug[strlen(debug)] = '\0';
     
@@ -129,14 +153,17 @@ __attribute__((interrupt)) void InvalidOpcode_Handler(InterruptFrameWithError* f
     strcat(debug, "\nFAULT ADDRESS: ");
     strcat(debug, toHString((uint64_t)frame->error_code));
 
-    if (taskScheduler::currentTask != nullptr){
+    task_t* ctask = task_scheduler::get_current_task();
+    if (ctask != nullptr){
         strcat(debug, "\nCurrent Task: ");
-        strcat(debug, taskScheduler::currentTask->task_name);
+        strcat(debug, ctask->name);
         strcat(debug, "\nTask state: ");
         strcat(debug, 
-            taskScheduler::currentTask->state == taskScheduler::task_state_t::Blocked ? "Blocked" :
-            taskScheduler::currentTask->state == taskScheduler::task_state_t::Paused ? "Paused" :
-            taskScheduler::currentTask->state == taskScheduler::task_state_t::Running ? "Running" :
+            ctask->state == task_state_t::BLOCKED ? "Blocked" :
+            ctask->state == task_state_t::PAUSED ? "Paused" :
+            ctask->state == task_state_t::RUNNING ? "Running" :
+            ctask->state == task_state_t::ZOMBIE ? "Zombie" :
+            ctask->state == task_state_t::DISABLED ? "Disabled" :
             "Stopped"
         );
     }
@@ -169,14 +196,17 @@ __attribute__((interrupt)) void StackSegFault_Handler(InterruptFrameWithError* f
     strcat(debug, "\nRETURN ADDRESS: ");
     strcat(debug, toHString((uint64_t)frame->rip));
 
-    if (taskScheduler::currentTask != nullptr){
+    task_t* ctask = task_scheduler::get_current_task();
+    if (ctask != nullptr){
         strcat(debug, "\nCurrent Task: ");
-        strcat(debug, taskScheduler::currentTask->task_name);
+        strcat(debug, ctask->name);
         strcat(debug, "\nTask state: ");
         strcat(debug, 
-            taskScheduler::currentTask->state == taskScheduler::task_state_t::Blocked ? "Blocked" :
-            taskScheduler::currentTask->state == taskScheduler::task_state_t::Paused ? "Paused" :
-            taskScheduler::currentTask->state == taskScheduler::task_state_t::Running ? "Running" :
+            ctask->state == task_state_t::BLOCKED ? "Blocked" :
+            ctask->state == task_state_t::PAUSED ? "Paused" :
+            ctask->state == task_state_t::RUNNING ? "Running" :
+            ctask->state == task_state_t::ZOMBIE ? "Zombie" :
+            ctask->state == task_state_t::DISABLED ? "Disabled" :
             "Stopped"
         );
     }
@@ -245,7 +275,7 @@ extern "C" void APICTimerInt_Handler(uint64_t rsp, uint64_t rbp){
     
     if (get_apic_id() == 0) TickAPIC();
 
-    taskScheduler::SchedulerTick(rbp, rsp);
+    task_scheduler::tick(rbp, rsp);
 }
 
 __attribute__((interrupt)) void SpuriousInt_Handler(interrupt_frame* frame){

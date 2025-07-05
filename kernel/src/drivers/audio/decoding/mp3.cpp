@@ -2,7 +2,6 @@
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_ALLOW_MONO_STEREO_TRANSITION
 #include <drivers/audio/decoding/mp3.h>
-#include <kernel.h>
 
 /*void playMP3(DirEntry* fileD){
     uint8_t* file = (uint8_t*)fileD->volume->LoadFile(fileD);

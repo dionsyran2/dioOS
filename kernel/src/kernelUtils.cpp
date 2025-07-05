@@ -77,6 +77,7 @@ bool cmdline_has_flag(const char* cmdline, const char* key) {
 
 void Initialize(multiboot_info* bootInfo){
     struct PSF1_FONT psf1_font;
+    struct multiboot_tag_module* psf1_module;
     size_t add_size = 0;
     struct multiboot_tag_module* module;
     // NOTE: We set i to 8 to skip size and reserved fields:
@@ -100,6 +101,7 @@ void Initialize(multiboot_info* bootInfo){
                 if (psf1_hdr->magic[0] != PSF1_MAGIC0 || psf1_hdr->magic[1] != PSF1_MAGIC1) break;
                 psf1_font.psf1_Header = psf1_hdr;
                 psf1_font.glyphBuffer = (void*)(module->mod_start + sizeof(PSF1_HEADER));
+                psf1_module = module;
                 break;
             }
             case MULTIBOOT_TAG_TYPE_ACPI_NEW:{
@@ -130,7 +132,8 @@ void Initialize(multiboot_info* bootInfo){
 			add_size += (8 - add_size % 8);
     }
 
-    GlobalAllocator.LockPages((void*)module->mod_start, (module->mod_end - module->mod_start) / 0x1000); 
+    GlobalAllocator.LockPages((void*)module->mod_start, (module->mod_end - module->mod_start) / 0x1000);
+    GlobalAllocator.LockPages((void*)psf1_module->mod_start, (psf1_module->mod_end - psf1_module->mod_start) / 0x1000);
     font = (PSF1_FONT*)malloc(sizeof(PSF1_FONT));
     font->psf1_Header = psf1_font.psf1_Header;
     font->glyphBuffer = psf1_font.glyphBuffer;
@@ -383,39 +386,20 @@ void SecondaryKernelInit(){
     //kprintf("X: %d, Y: %d\n", globalRenderer->targetFramebuffer->common.framebuffer_width, globalRenderer->targetFramebuffer->common.framebuffer_height);
     PCI::EnumeratePCI(mcfg);
 
-
-    InitRegistry();
-
-    vnode_t* root = vfs::get_root_node();
-    vfs::mount_node("test1", VDIR, nullptr);
-    vnode_t* dev = vfs::mount_node("dev", VDIR, nullptr);
-
-    // set the root directory:
-
-    vnode_t* fs = vfs::resolve_path("/mnt/sda1");
-    if (fs != nullptr){
-        root->fs_data = fs->fs_data;
-        root->fs_sec_data = fs->fs_sec_data;
-        root->fs_th_data = fs->fs_th_data;
-        memcpy(&root->ops, &fs->ops, sizeof(vnode_ops));
-
-        for (int i = 0; i < fs->num_of_children; i++){
-            // copy the children
-            root->children[root->num_of_children] = fs->children[i];
-            root->num_of_children++;
-        }
+    
+    if(!load_users()){
+        panic("Could not locate the user data!", "Make sure the root filesystem contains the necessary files!");
     }
-
 
     if (!globalRenderer->status){
         boolean_flag_1 = true;
         while(boolean_flag_1);
     }
 
+
+    task_t* task = task_scheduler::create_process("Teletype Terminal Emulator", (function)session::CreateSession);
     globalRenderer->Set(false);
-    
-    taskScheduler::task_t* task = taskScheduler::CreateTask((void*)session::CreateSession, 0, false);
-    task->valid = true;
+    task_scheduler::mark_ready(task);
 }
 
 

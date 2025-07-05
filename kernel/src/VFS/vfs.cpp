@@ -1,6 +1,35 @@
 #include <VFS/vfs.h>
 #include <memory.h>
 #include <cstr.h>
+#include <kerrno.h>
+
+int vnode_t::iocntl(int op, char* argp){
+    if (ops.iocntl != nullptr){
+        return ops.iocntl(op, argp, this);
+    }
+    return -ENOSYS;
+}
+
+void* vnode_t::load(size_t* cnt){
+    if (ops.load != nullptr){
+        return ops.load(cnt, this);
+    }
+    return nullptr;
+}
+
+int vnode_t::write(const char* txt, size_t length){
+    if (ops.write != nullptr){
+        return ops.write(txt, length, this);
+    }
+    return -EACCES;
+}
+
+int vnode_t::mkfile(const char* fn, bool dir){
+    if (ops.create_subdirectory != nullptr){
+        return ops.create_subdirectory(fn, dir, this);
+    }
+    return -EROFS;
+}
 
 namespace vfs{
     vnode_t* start_node = nullptr; // the start of the node (the "/" directory)
@@ -20,10 +49,20 @@ namespace vfs{
         return nullptr;
     }
 
+    int def_write(const char* txt, size_t length, vnode* this_node){
+        return -EACCES;
+    }
+
+    int def_create_subdirectory(const char* fn, bool dir, vnode* this_node){
+        vfs::mount_node((char*)fn, dir ? VDIR : VREG, this_node);
+        return 0;
+    }
+
     void _create_start_node(){
         start_node = new vnode_t;
         memset(start_node, 0, sizeof(vnode_t));
 
+        start_node->type = VNODE_TYPE::VDIR;
         strcpy(start_node->name, "/");
         start_node->ops.read_dir = def_read_dir;
         start_node->ops.load = def_load;
@@ -82,6 +121,13 @@ namespace vfs{
         return current;
     }
 
+    bool root = false;
+    bool is_root(){
+        // should check if partition ids match and stuff... blah blah blah boring, just mount the first partition
+        if (root) return false;
+        root = true;
+        return true;
+    }
 
     vnode_t* mount_node(char* name, VNODE_TYPE type, vnode_t* parent){
         if (start_node == nullptr) _create_start_node();
@@ -127,6 +173,9 @@ namespace vfs{
 
         node->ops.read_dir = def_read_dir;
         node->ops.load = def_load;
+        node->ops.create_subdirectory = def_create_subdirectory;
+        node->ops.write = def_write;
+        
         strcpy(node->name, name);
 
         return node;
@@ -144,6 +193,7 @@ namespace vfs{
     }
 
     void _print_tree(vnode_t* node, int depth, bool is_last, char* prefix) {
+        if (node == nullptr) node = get_root_node();
         static char local_prefix[256];
 
         if (!prefix) prefix = local_prefix;
@@ -170,5 +220,28 @@ namespace vfs{
             bool last_child = (i == count - 1);
             _print_tree(children[i], depth + 1, last_child, new_prefix);
         }
+    }
+
+    char* get_full_path_name(vnode_t* node){
+        vnode_t* root = get_root_node();
+        if (node == nullptr || node == root) return "/"; // root directory
+        char* name = new char[strlen(node->name) + 2];
+        name[0] = '/';
+        name[1] = '\0';
+        strcat(name, node->name); //'/app' -> '/to/app' -> '/path/to/app'
+        
+        vnode_t* pnode = node->parent;
+        while(pnode != nullptr && pnode != root){
+            char* old_name = name;
+            name = new char[strlen(old_name) + strlen(pnode->name) + 2]; // +2, one for the '/' and one for the '\0'
+            name[0] = '/';
+            name[1] = '\0'; // null terminate it for strcat to work properly (just in case)
+            strcat(name, pnode->name);
+            strcat(name, old_name);
+            pnode = pnode->parent;
+
+            delete[] old_name;
+        }
+        return name;
     }
 }
