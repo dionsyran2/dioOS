@@ -4,7 +4,6 @@
 #include "madt.h"
 #include "../../interrupts/interrupts.h"
 #include "../../IO.h"
-#include "../../kernel.h"
 #include "../../drivers/serial.h"
 #include "../../IO.h"
 #include "../pit/pit.h"

@@ -19,6 +19,7 @@ const char* toHString(uint16_t value);
 const char* toHString(uint8_t value);
 const char* toString(double value, uint8_t decimalPlaces);
 const char* toString(double value);
+const char* toString(int value);
 char* strcat(char* destination, const char* source);
 int strcmp(const char* str1, const char* str2);
 int strncmp(const char* str1, const char* str2, size_t size);

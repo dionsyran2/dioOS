@@ -13,7 +13,8 @@ enum VNODE_TYPE{
     VCHR = 3,
     VBLK = 4,
     VSOC = 5,
-    VBAD = 6
+    VBAD = 6,
+    VPIPE = 7
 };
 
 struct vnode;
@@ -25,24 +26,37 @@ struct vnode_ops {
     int (*write)(const char* txt, size_t length, vnode* this_node);
     int (*create_subdirectory)(const char* fn, bool dir, vnode* this_node);
     int (*read_dir)(vnode** out_list, size_t* out_count, vnode* this_node);
+    int (*iocntl)(int op, char* argp, vnode* this_node);
     // ...
 };
 
 typedef struct vnode{
     vnode* next;
     VNODE_TYPE type;
-    char name[64];
-
     struct vnode_ops ops;
+    char name[128];
     
     vnode* parent;
     
-    vnode* children[124];
+    vnode* children[512];
     int num_of_children;
 
+    size_t size;
+    uint64_t flags;
+    
+    uint8_t* loaded_data;
+    size_t loaded_data_size;
+
+    bool data_available; // used for pipes, ttys etc.
+    
     void* fs_data;
     void* fs_sec_data;
     void* fs_th_data;
+    
+    int iocntl(int op, char* argp);
+    void* load(size_t* cnt);
+    int write(const char* txt, size_t length);
+    int mkfile(const char* fn, bool dir);
 } vnode_t;
 
 struct vblk;

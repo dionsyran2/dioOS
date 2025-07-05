@@ -2,6 +2,8 @@
 #include "apic.h"
 #include "interrupts/IDT.h"
 #include <gdt/gdt.h>
+#include <ArrayList.h>
+
 extern "C" void ap_start();
 extern "C" void ap_start_end();
 extern "C" void ap_protected_mode_entry();

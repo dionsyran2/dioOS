@@ -10,6 +10,8 @@ class PageTableManager {
     void UnmapMemory(void* virtualMemory);
     void ClonePTM(PageTableManager*);
     bool isMapped(void* vaddr);
+    uint64_t getPhysicalAddress(void* vaddr);
+    void SetMemoryVal(void* virtualMemory, uint64_t val);
 };
 
 extern PageTableManager globalPTM;

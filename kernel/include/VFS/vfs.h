@@ -15,4 +15,6 @@ namespace vfs{
     vnode_t* get_root_node();
     vnode_t* mount_node(char* name, VNODE_TYPE type, vnode_t* parent);
     vnode_t* resolve_path(const char* path);
+    char* get_full_path_name(vnode_t* node);
+    bool is_root();
 }

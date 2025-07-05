@@ -1,8 +1,12 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
-#include "../BasicRenderer.h"
+#include <scheduling/task/scheduler.h>
+#include <BasicRenderer.h>
 #include <VFS/vfs.h>
+#include <users.h>
+
+
 
 namespace ELFLoader{
 
@@ -166,6 +170,8 @@ namespace ELFLoader{
         uint64_t sh_entsize;
     };
 
-    int Load(vnode_t* file, int priority);
+
+    int Load(vnode_t* file, int priority, user_t* user, vnode_t* tty, session::session_t* session = nullptr, task_t* parent = nullptr);
+    int kexecve(vnode_t* node, int argc_src, char** argv_src, char** envp_src);
 }
 

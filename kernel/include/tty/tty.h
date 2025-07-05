@@ -1,8 +1,8 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
-
 #include <VFS/vfs.h>
+#include <syscalls/termios.h>
 
 #define TTY_BOLD        1
 #define TTY_UNDERLINE   2
@@ -19,7 +19,6 @@ namespace tty{
 
     typedef struct tty{
         vnode_t* node;
-        bool mode; // true = echo back
 
         uint32_t rows;
         uint32_t cols;
@@ -32,11 +31,11 @@ namespace tty{
         cell_t* screen;
 
         char* buffer;
-        char* output;
 
-        int output_length;
         int offset_in_buffer;
         int edit_offset;
+
+        int foreground_group_id;
 
         uint32_t style;
         uint32_t fg;
@@ -46,6 +45,8 @@ namespace tty{
         bool _data_to_read;
         bool _writing_data;
         bool _no_cursor;
+
+        termios term; // FUCK SYSCALLS
 
         void draw_screen();
         void draw_cell(uint32_t row, uint32_t col);

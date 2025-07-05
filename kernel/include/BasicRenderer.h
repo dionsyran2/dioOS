@@ -50,6 +50,9 @@ class BasicRenderer{
     void HandleScrolling();
     bool status = false;
     void Set(bool b);
+    
+    void draw_cursor(uint32_t x, uint32_t y);
+    void clear_cursor(uint32_t x, uint32_t y);
 
     void draw_char_tty(uint32_t color, uint32_t bg, char chr, unsigned int xOff, unsigned int yOff, bool underline);
     void PutPixFB(uint32_t X, uint32_t Y, uint32_t Colour);

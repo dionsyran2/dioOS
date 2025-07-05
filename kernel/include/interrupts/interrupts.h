@@ -1,19 +1,17 @@
 #pragma once
 #include <stdint.h>
-#include "../BasicRenderer.h"
-#include "../panic.h"
-#include "../scheduling/apic/apic.h"
-#include "../scheduling/hpet/hpet.h"
-#include "../kernel.h"
-#include "../drivers/USB/XHCI.h"
-#include "../IO.h"
-#include "../UserInput/keyboard.h"
-#include "../UserInput/mouse.h"
-#include "../scheduling/pit/pit.h"
-#include "../drivers/serial.h"
-#include "../scheduling/task/scheduler.h"
-/*#include "../syscalls.h"
-#include "../drivers/audio/HDA.h"*/
+#include <BasicRenderer.h>
+#include <panic.h>
+#include <scheduling/apic/apic.h>
+#include <scheduling/hpet/hpet.h>
+#include <drivers/USB/XHCI.h>
+#include <IO.h>
+#include <UserInput/keyboard.h>
+#include <UserInput/mouse.h>
+#include <scheduling/pit/pit.h>
+#include <drivers/serial.h>
+#include <scheduling/task/scheduler.h>
+
 
 #define PIC1_COMMAND 0x20
 #define PIC1_DATA 0x21

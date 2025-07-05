@@ -1,14 +1,24 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
-#include "../apic/apic.h"
-#include "../../paging/PageFrameAllocator.h"
-#include "../../userspace/userspace.h"
-#include "../../kernel.h"
+#include <session/session.h>
+#include <scheduling/apic/apic.h>
+#include <paging/PageFrameAllocator.h>
+#include <paging/PageTableManager.h>
+#include <VFS/vfs.h>
+#include <syscalls/linux/signals.h>
 
 
 
-#define TASK_SCHEDULER_COUNTER_DEFAULT 20//The larger the quantum, the "laggier" the user experience - quanta above 100ms should be avoided.
+#define TASK_SCHEDULER_COUNTER_DEFAULT              20              // The larger the quantum, the "laggier" the user experience - quanta above 100ms should be avoided.
+#define TASK_SCHEDULER_DEFAULT_STACK_SIZE           4 * 1024 * 1024 // 1MB
+#define TASK_SCHEDULER_DEFAULT_STACK_LOCATION       0xFFFF820000000000
+#define TASK_SCHEDULER_DEFAULT_KSTACK_LOCATION      0xFFFF830000000000
+
+
+#define TASK_SCHEDULER_DEFAULT_STACK_SIZE_IN_PAGES  \
+    (TASK_SCHEDULER_DEFAULT_STACK_SIZE / 0x1000) + 1 // For 1MB this should be 256 pages
+
 
 typedef struct {
     uint64_t a_type;
@@ -17,85 +27,171 @@ typedef struct {
 
 
 
-#define BRK_DEFAULT_BASE 0xffff900000000000
+#define BRK_DEFAULT_BASE 0xFFFF890000000000
+#define RMAP_DEFAULT_BASE 0xFFFF850000000000
 #define PUSH_TO_STACK(rsp, type, value)                                                 \
   rsp -= sizeof(type);                                                              \
   *((type *)(rsp)) = value
 
-namespace taskScheduler{
-    typedef void (*func_ptr)(void*);
 
-    enum task_state_t{
-        Stopped = 0,
-        Running = 1,
-        Paused = 2,
-        Blocked = 3,
-    };
 
-    struct task_t{
-        uint64_t pid;
-        uint64_t tid;
-        bool valid = false;
-        bool exit = false; // Whether an exit was requested. if yes, any reserved memory will be unreserved and the task will be removed from the list.   
-        char task_name[32];
-        task_state_t state = Stopped;
-        uint64_t stack = 0;
-        uint64_t kernelStack = 0;
-        uint8_t tasklist = 0;
-        uint64_t rbp;
-        uint64_t rsp;
-        uint64_t rip;
+typedef void (*function)(void);
 
-        uint64_t rdi;
-        uint64_t rsi;
-        uint64_t rdx;
-        uint64_t* tid_address;
+#define TASK_CPL3 1
 
-        uint64_t brk;
-        uint64_t brk_end;
+typedef enum {
+    DISABLED     = 0,
+    PAUSED      = 1,
+    BLOCKED     = 2,
+    RUNNING     = 3,
+    ZOMBIE      = 4,
+    STOPPED     = 5,
+    INTERRUPTED = 6
+} task_state_t;
 
-        uint8_t blockType = 0; //1 = Sleep, 2 = iowait.
-        uint64_t block = 0;
-        uint8_t priotity;
-        void* Context;
-        bool reducedCounter = 0; //If set, reduces the counter to 5ms
-        bool userspace;
-        void initialize(void* function);
-        void setName(char* name);
-        void decreaseCounter();
-        void resetCounter();
-        void Sleep();
-        uint64_t getCounter();
-        bool isUnblocked();
-        func_ptr function;
-        task_t* parent;
-        PageTableManager* ptm;
-        uint64_t tmp_PML4;
-        PageTableManager* CreatePageTableMgr();
-        private:
-        //uint8_t priority; // used in case of priority switching, so the thread is able to get some cpu time if it is starved by higher priority processes.
-        int64_t counter = 0;
-    };
+enum block_type{
+    WAITING_ON_CHILD = 1,
+};
 
-    struct tasklist_t{
-        task_t* tasks[1024];
-        size_t numOfTasks = 0;
-    };
+struct open_fd_t;
+
+typedef struct task {
+    task* previous;
+    task* next;
+
+    const char* name;
+
+    function entry;
+    bool jmp;
+
+    uint16_t pgid; // process group id
+    int32_t ppid;
+    uint16_t pid;
+    uint16_t tid;
+
+    uint16_t gid;
+    uint16_t egid;
+    uint16_t uid;
+    uint16_t euid;
+
+    uint64_t tid_address;
+    int exit_code;
+
+    uint64_t stack;
+    uint64_t kstack;
+    uint64_t syscall_stack;
+    uint64_t sig_stack;
+
+    uint64_t brk;
+    uint64_t brk_end;
+
+    uint64_t* rmap_ptr;
+
+    uint64_t rdi;
+    uint64_t rsi;
+    uint64_t rdx;
+    uint64_t rbp;
+    uint64_t rsp;
+
+    block_type block;
+    int block_info;
+
+    uint64_t counter;
     
-    void InitializeScheduler(uint8_t numOfPriotities);
-    task_t* CreateTask(void* task, uint8_t priority, bool user);
-    void RemoveTask(task_t* task);
-    void SwitchTask(uint64_t rbp, uint64_t rsp);
-    void SchedulerTick(uint64_t rbp, uint64_t rsp);
-    void setup_stack(task_t* task, int argc, char* argv[], char* envp[], auxv_t auxv_entries[]);
-    extern tasklist_t* tasklists;
-    extern uint8_t numOfTaskLists;
-    extern bool disableSwitch;
-    extern task_t* currentTask;
-    extern task_t* WM_TASK;
+    uint64_t flags;
 
-    void stackGenerateUser(task_t *target, uint32_t argc, char **argv, uint32_t envc,
-                           char **envv, uint8_t *out, size_t filesize,
-                           void *elf_ehdr_ptr, size_t at_base);
+    PageTableManager* ptm;
+
+    int* open_file_descriptors;
+    open_fd_t* open_fds; // its a chain, ending in null
+
+    open_fd_t* fd_cwd;
+    open_fd_t* fd_root;
+
+    vnode_t* nd_cwd; // current working directory... if this is null, something has gone terribly wrong
+    vnode_t* nd_root; // root directory... i am not exactly sure how this works... i will figure it out eventually
+    
+    vnode_t* tty;
+
+    char* envp; // contains env entries, ends in a null pointer (envp[ν] = nullptr)
+    task_state_t state;
+
+    session::session_t* session;
+
+    uint64_t tmp_data[8];
+
+    uint64_t fs_base; // i totally didnt forget about this...
+    uint64_t gs_base;
+
+    uint64_t current_user_stack_ptr; // a place for the syscall handler to save the user rsp
+
+    uint64_t pending_signals;
+    uint64_t signal_mask;
+    sigaction signals[54];
+
+    bool is_signal_handler;
+    bool executing_a_handler;
+
+    open_fd_t* open_node(vnode_t* node, int start = -1);
+    void close_fd(open_fd_t* fd);
+    open_fd_t* get_fd(uint64_t fd);
+    void exit(int code);
+} task_t;
+
+struct open_fd_t {
+    open_fd_t* next;
+    open_fd_t* previous;
+    uint64_t fd;
+    vnode_t* node;
+    int own;
+    int own_type;
+    task_t* owner;
+    char* data;
+    uint64_t offset;
+    uint64_t length;
+    uint64_t size_in_memory; //may be more than the length, usually aligned to a 4KB or 512 bytes
+    uint64_t flags; // perms like r/w etc.
+    uint64_t other_end; // pipes
+    uint64_t dl_off;
+};
+
+namespace task_scheduler{
+    extern bool disable_scheduling;
+    
+    task_t* get_current_task();
+
+    task_t* create_process(
+        const char* name, function entry, task_t* parent = nullptr, bool ptm = false, vnode_t* tty = nullptr, char* envp = nullptr, int uid = -1, int gid = -1, int euid = -1, int egid = -1, uint64_t rdi = 0,
+        uint64_t rsi = 0, uint64_t rdx = 0, uint64_t flags = 0, vnode_t* cwd = nullptr, vnode_t* root = nullptr, session::session_t* session = nullptr
+    );
+
+    task_t* create_thread(
+        task_t* process, function entry, int uid = -1, int gid = -1, int euid = -1, int egid = -1, uint64_t rdi = 0,
+        uint64_t rsi = 0, uint64_t rdx = 0, uint64_t flags = 0
+    );
+
+    task_t** get_children(int parent, size_t* length);
+
+    void run_next_task(uint64_t rbp, uint64_t rsp);
+
+    void mark_ready(task_t* task);
+
+    void tick(uint64_t rbp, uint64_t rsp);
+
+    task_t* get_process(uint16_t pid);
+
+    task_t* fork_process(task_t* process, function entry);
+
+    void block_task(task_t* task, block_type type, int data);
+    void unblock_task(task_t* task);
+    void remove_task(task_t* task);
+    
+    uint64_t allocate_stack();
+    void free_stack(void* pages);
+
+    void init();
 }
+
 extern "C" void run_task_asm();
+void setup_stack(task_t* task, int argc, char* argv[], char* envp[], auxv_t auxv_entries[]);
+extern task_t* task_list;

@@ -17,10 +17,9 @@
 #include "scheduling/hpet/hpet.h"
 #include "scheduling/task/scheduler.h"
 #include "gdt/gdt.h"
-#include "userspace/userspace.h"
 #include "syscalls/syscalls.h"
-#include "registry/registry.h"
 #include <cpu.h>
+#include <users.h>
 
 //Drivers
 #include "drivers/serial.h"
@@ -41,7 +40,6 @@ struct multiboot_info {
     uint32_t reserved;
     struct multiboot_tag* first;
 };
-
 
 extern uint64_t _KernelStart;
 extern uint64_t _KernelEnd;
