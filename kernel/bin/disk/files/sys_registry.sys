@@ -1,0 +1,16 @@
+dioOS Registry | Version 1.0
+
+[HKEY_LOCAL_MACHINE]
+
+[HKEY_LOCAL_MACHINE\SYS_SETTINGS\WM]
+"BACKGROUND"="C:\images\wallpaper.bmp"
+"POWER_OPTIONS"="C:\images\icon_power.bmp"
+"CLOSE_BUTTON"="C:\images\wm_icons\close_btn.bmp"
+"MINIMIZE_BUTTON"="C:\images\wm_icons\minimize_btn.bmp"
+"START_ICON"="C:\images\wm_icons\start_btn.bmp"
+
+[HKEY_LOCAL_MACHINE\SYS_SETTINGS]
+"Test1"=bool:true
+"Test2"=byte:0x12
+"Test3"=dword:1234
+
