@@ -237,5 +237,6 @@ namespace PS2Mouse
 
         MouseWrite(0xF4);
         MouseRead();
+        return 0;
     }
 }

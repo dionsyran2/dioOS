@@ -269,6 +269,7 @@ connList *HDA::GetConnectedNodes(int codec, int widget)
     connList *list = new connList;
     memcpy(list->connections, connections, entries * sizeof(uint8_t));
     list->size = entries;
+    return list; // how tf did it work without this return statement...
 }
 
 void HDA::EnumerateWidgets(int codec, int function)
@@ -475,6 +476,7 @@ uint8_t HDA::FindPin()
             return pin;
         }
     }
+    return 0;
 }
 /*
 uint32_t cap = SRCMD(codec, widget, GetParameters, AudioWidgetCapabilities);

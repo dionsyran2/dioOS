@@ -20,3 +20,7 @@ mnt
 
 # Batch files
 *.bat
+
+# vscode stuff
+*.code-workspace
+*.vscode

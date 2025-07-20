@@ -73,7 +73,7 @@ namespace drivers{
     }
 
     bool xhci_driver::shutdown_device(){
-        
+        return 0;
     }
 
 

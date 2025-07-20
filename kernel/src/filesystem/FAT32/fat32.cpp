@@ -53,6 +53,7 @@ namespace filesystem{
         }
 
         *out_count = sz;
+        return 0;
     }
 
     void* fat32_load(size_t* cnt, vnode_t* this_node){
@@ -110,6 +111,7 @@ namespace filesystem{
         } else {
             return table_value; //Next Cluster
         }
+        return 0;
     }
 
     void fat32::_mark_cluster(uint32_t cluster, uint32_t data){ // either the next cluster or 0x0FFFFFFF for end of chain
@@ -397,7 +399,7 @@ namespace filesystem{
         }
 
         _save_fat();
-        
+        return 0;
     }
 
     vnode_t* fat32::_create_vnode_from_fat_dir(FAT_DIR* dir, char* name){
@@ -651,7 +653,7 @@ namespace filesystem{
     }
 
     bool fat32::_createlfns(FAT32_LFN** array, size_t* count, char* name){
-
+        return true;
     }
 
     /* Just add the necessary entries at the end of the parent's entries, find a sector, create '.' and '..' entries with their respective sectors in the new dir */

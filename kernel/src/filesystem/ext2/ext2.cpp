@@ -311,8 +311,8 @@ namespace filesystem{
 
         delete[] blocks;
 
-        void* heap = malloc(offset + 0x1000);
-        heap += (0x1000 - ((uint64_t)heap & 0xFFF));
+        void* heap = malloc(offset/* + 0x1000*/);
+        //heap += (0x1000 - ((uint64_t)heap & 0xFFF)); yeah... this is a bad idea, lets not do that
         memcpy(heap, mem, offset);
         GlobalAllocator.FreePages(mem, DIV_ROUND_UP(length * block_size, 0x1000));
         *ln = inode->size_low;
@@ -358,7 +358,7 @@ namespace filesystem{
 
         size_t offset = 0;
         while (offset < fsz){
-            ext2_directory* entry = (ext2_directory*)(data + offset);
+            ext2_directory* entry = (ext2_directory*)((uint8_t*)data + offset);
             char name[entry->name_length + 1] = { 0 };
             memcpy(&name, entry->name, entry->name_length);
 

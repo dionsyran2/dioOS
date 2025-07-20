@@ -200,14 +200,14 @@ namespace ELFLoader
             for (int i = 0; i < ehdr->e_phnum; i++) {
                 ProgramHdr64 *elf_phdr = (ProgramHdr64 *)((size_t)file + ehdr->e_phoff + i * ehdr->e_phentsize);
                 if (elf_phdr->p_type != PT_LOAD) continue;
-                kprintf("elf_phdr->p_vaddr: %llx | elf_phdr->p_type: %d\n", elf_phdr->p_vaddr, elf_phdr->p_type);
+                //kprintf("elf_phdr->p_vaddr: %llx | elf_phdr->p_type: %d\n", elf_phdr->p_vaddr, elf_phdr->p_type);
 
                 if (lowest_header > elf_phdr->p_vaddr) lowest_header = elf_phdr->p_vaddr;
                 if (highest_header < elf_phdr->p_vaddr) highest_header = elf_phdr->p_vaddr;
             }
             
             size_t phdr_base = lowest_header + 0x80000000000;
-            kprintf("phdr thing: %llx, ehdr->e_phoff: %llx\n", phdr_base, ehdr->e_phoff);
+            //kprintf("phdr thing: %llx, ehdr->e_phoff: %llx\n", phdr_base, ehdr->e_phoff);
 
             char* fp = vfs::get_full_path_name(node);
             char* execfn = new char[strlen(fp) + 1];

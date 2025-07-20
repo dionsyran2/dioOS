@@ -157,5 +157,6 @@ namespace PS2{
         
         kprintf(0x00FF00, "[PS/2] ");
         kprintf("Mouse initialized!\n");
+        return 0;
     }
 }

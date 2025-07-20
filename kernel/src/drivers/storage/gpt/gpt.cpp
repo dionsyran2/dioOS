@@ -94,6 +94,7 @@ namespace GPT{
 
         GlobalAllocator.FreePage(hdr);
         GlobalAllocator.FreePages(buffer, ((hdr->SIZE_OF_PE * hdr->NUMBER_OF_PARTITION_ENTRIES) / 0x1000) + 1);
+        return true;
     }
 
 }
