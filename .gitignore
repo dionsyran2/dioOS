@@ -1,0 +1,22 @@
+# Object and binary files
+*.o
+*.bin
+*.iso
+*.elf
+*.img
+*.vmdk
+
+# Build folders
+bootloader/grub-*
+bootloader/BOOTX64.EFI
+applications/bin
+applications/lib
+kernel/bin
+kernel/lib
+mnt
+
+# Logs
+*.log
+
+# Batch files
+*.bat
