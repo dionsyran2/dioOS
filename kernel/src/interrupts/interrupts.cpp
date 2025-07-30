@@ -137,8 +137,11 @@ __attribute__((interrupt)) void GPFault_Handler(InterruptFrameWithError* frame){
 }
 
 __attribute__((interrupt)) void KeyboardInt_Handler(interrupt_frame* frame){
+    bool prev = task_scheduler::disable_scheduling;
+    task_scheduler::disable_scheduling = true;
     EOI();
     PS2KB::HandleKBInt();
+    task_scheduler::disable_scheduling = prev;
 }
 
 __attribute__((interrupt)) void DivisionError_Handler(interrupt_frame* frame){

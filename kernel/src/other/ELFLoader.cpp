@@ -66,40 +66,53 @@ namespace ELFLoader
     }
 
     void LoadHeader(PageTableManager* ptm, uint64_t base, uint8_t* file, ProgramHdr64* hdr) {
-        size_t offset = hdr->p_vaddr & 0xFFF;
+        size_t align = hdr->p_align >= 0x1000 ? hdr->p_align : 0x1000;
+        uint64_t seg_start = hdr->p_vaddr & ~(align - 1);
+        size_t offset = hdr->p_vaddr - seg_start;
         size_t memsz = hdr->p_memsz + offset;
         size_t page_count = (memsz + 0xFFF) / 0x1000;
 
         void* m = GlobalAllocator.RequestPages(page_count);
         memset(m, 0, memsz);
 
-        uint64_t virt_base = base + (hdr->p_vaddr & ~0xFFF);
-        //kprintf("Loading hdr at %llx, length: %llx\n", hdr->p_align, base + hdr->p_vaddr, hdr->p_memsz);
+        uint64_t virt_base = base + seg_start;
 
+        //kprintf("p_align: %llx, v_addr: %llx, p_memsz: %d bytes\n", hdr->p_align, base + hdr->p_vaddr, hdr->p_memsz);
+        serialf("\e[0;35mLoading header at v_addr: %llx, %d bytes\e[0m\n", hdr->p_vaddr + base, hdr->p_memsz);
         for (size_t o = 0; o < page_count; o++) {
             uint64_t v_addr = virt_base + (o * 0x1000);
+            if (ptm->isMapped((void*)v_addr)) continue;
             uint64_t p_addr = (uint64_t)m + (o * 0x1000);
             ptm->MapMemory((void*)v_addr, (void*)p_addr);
+            if ((hdr->p_flags & PF_R) && (hdr->p_flags & PF_W) == 0) {
+                ptm->SetPageFlag((void*)v_addr, PT_Flag::ReadWrite, false);
+            }else{
+                ptm->SetPageFlag((void*)v_addr, PT_Flag::ReadWrite, true);
+            }
+            if ((hdr->p_flags & PF_X) == 0) ptm->SetPageFlag((void*)v_addr, PT_Flag::NX, true);
+            //kprintf(0xFF0000, "%llx | %llx\n", v_addr, p_addr);
         }
 
         uint8_t* dest = (uint8_t*)m + offset;
         memcpy_simd(dest, file + hdr->p_offset, hdr->p_filesz);
+        //kprintf("-------------------------------------------------------------\n");
     }
 
 
-    uint64_t LoadInMemory(PageTableManager* ptm, uint64_t base, uint8_t* file){
+    uint64_t LoadInMemory(PageTableManager* ptm, uint64_t base, uint8_t* file, uint64_t* lowest_address){
         Elf64_Ehdr* ehdr = (Elf64_Ehdr*)file;
-
+        uint64_t lowest = UINT64_MAX;
         for (int i = 0; i < ehdr->e_phnum; i++){
             ProgramHdr64* phdr = &(((ProgramHdr64*)(file + ehdr->e_phoff))[i]);
             switch (phdr->p_type){
                 case PT_LOAD: {
+                    if ((phdr->p_vaddr + base) < lowest) lowest = phdr->p_vaddr + base;
                     LoadHeader(ptm, base, file, phdr);
                     break;
                 }
             }
         }
-
+        if (lowest_address != nullptr) *lowest_address = lowest;
         //kprintf("LOADED\n");
         return base + ehdr->e_entry;
     }
@@ -107,9 +120,10 @@ namespace ELFLoader
     int Load(vnode_t *node, int priority, user_t* user, vnode_t* tty, session::session_t* session, task_t* parent){
         globalRenderer->Set(true);
 
-        if (node->loaded_data == nullptr) node->loaded_data = (uint8_t*)node->load(&node->loaded_data_size);
-        size_t cnt = node->loaded_data_size;
-        uint8_t* file = node->loaded_data;
+        size_t cnt = 0;
+        uint8_t* file = nullptr;
+        int res = node->read(&cnt, (void**)&file);
+        serialf("RES: %d %llx %d\n", res, file, cnt);
         bool b = false;
         Elf64_Ehdr* ehdr = (Elf64_Ehdr*)file;
 
@@ -152,24 +166,30 @@ namespace ELFLoader
         globalPTM.ClonePTM(ptm);
 
         char* interp_path = GetInterpreter(file);
+        
 
         if (interp_path != nullptr){
             //kprintf(0x00F0F0, "INTERP: %s\n", interp_path);
 
             vnode_t* interp_node = vfs::resolve_path(interp_path);
-
+            
             if (interp_node == nullptr){
                 //kprintf(0xFF0000, "Could not locate the interpreter: %s\n", interp_path);
                 return -1;
             }
 
-            if (interp_node->loaded_data == nullptr) interp_node->loaded_data = (uint8_t*)interp_node->load(&interp_node->loaded_data_size);
-            size_t cnt = interp_node->loaded_data_size;
-            uint8_t* interp = interp_node->loaded_data;
-
+            size_t cnt = 0;
+            uint8_t* interp;
+            interp_node->read(&cnt, (void**)&interp);
+        
             Elf64_Ehdr* interp_ehdr = (Elf64_Ehdr*)interp;
-            uint64_t interp_entry = LoadInMemory(ptm, 0x100000000000, interp);
-            uint64_t main_entry = LoadInMemory(ptm, 0x80000000000, file);
+            if (!verify_elf(interp_ehdr)){
+                kprintf("The interpreter is not a valid ELF64 file\n");
+                return 0;
+            }
+            uint64_t interp_entry = LoadInMemory(ptm, 0x100000000000 , interp, nullptr);
+            uint64_t lowest_header = 0x80000000000;
+            uint64_t main_entry = LoadInMemory(ptm, 0x80000000000, file, &lowest_header);
             //kprintf("main: %llx\n", main_entry);
             task->entry = (function)interp_entry;
             //kprintf("entry: %llx\n", interp_entry);
@@ -195,20 +215,6 @@ namespace ELFLoader
             char* arch = new char[strlen("x86_64") + 1];
             strcpy(arch, "x86_64");
 
-            size_t lowest_header = 0xFFFFFFFFFFFFFFFF;
-            size_t highest_header = 0;
-            for (int i = 0; i < ehdr->e_phnum; i++) {
-                ProgramHdr64 *elf_phdr = (ProgramHdr64 *)((size_t)file + ehdr->e_phoff + i * ehdr->e_phentsize);
-                if (elf_phdr->p_type != PT_LOAD) continue;
-                //kprintf("elf_phdr->p_vaddr: %llx | elf_phdr->p_type: %d\n", elf_phdr->p_vaddr, elf_phdr->p_type);
-
-                if (lowest_header > elf_phdr->p_vaddr) lowest_header = elf_phdr->p_vaddr;
-                if (highest_header < elf_phdr->p_vaddr) highest_header = elf_phdr->p_vaddr;
-            }
-            
-            size_t phdr_base = lowest_header + 0x80000000000;
-            //kprintf("phdr thing: %llx, ehdr->e_phoff: %llx\n", phdr_base, ehdr->e_phoff);
-
             char* fp = vfs::get_full_path_name(node);
             char* execfn = new char[strlen(fp) + 1];
             strcpy(execfn, fp);
@@ -219,7 +225,7 @@ namespace ELFLoader
                 {AT_PHDR, 0x80000000000 + ehdr->e_phoff},
                 {AT_PHENT, ehdr->e_phentsize},
                 {AT_PHNUM, ehdr->e_phnum},
-                {AT_BASE, 0x100000000000},
+                {AT_BASE, 0x100000000000 },
                 {AT_FLAGS, 0},
                 {AT_ENTRY, main_entry},
                 {AT_UID, uid},
@@ -234,14 +240,14 @@ namespace ELFLoader
             };
 
             char* argv[] = { vfs::get_full_path_name(node), NULL };
-            const char* envp[] = { "PATH=/bin", "SHELL=/bin/bash", "NAME=dioOS", "TERM=xterm-256color", "DISPLAY=:0", "PS1=\\[\\033[01;32m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ", NULL };
+            const char* envp[] = { "PATH=/bin", "SHELL=/bin/bash", "NAME=dioOS", "TERM=ansi", "DISPLAY=:0", "PS1=\\[\\033[01;32m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ", NULL };
             setup_stack(task, 1, argv, (char**)envp, auxv_entries);
 
             //kprintf("INSPECT: %llx\n", task->rsp);
             task_scheduler::mark_ready(task);
 
         }else{
-            uint64_t entry = LoadInMemory(ptm, ehdr->e_type == 1 ? 0x80000000 : 0, file);
+            uint64_t entry = LoadInMemory(ptm, ehdr->e_type == 1 ? 0x80000000 : 0, file, nullptr);
             task->entry = (function)entry;
             task_scheduler::mark_ready(task);
         }
@@ -254,10 +260,11 @@ namespace ELFLoader
         
         task_t* ctask = task_scheduler::get_current_task();
 
-        if (node->loaded_data == nullptr) node->loaded_data = (uint8_t*)node->load(&node->loaded_data_size);
-        size_t cnt = node->loaded_data_size;
-        uint8_t* file = node->loaded_data;
-
+        size_t cnt = 0;
+        uint8_t* file;
+        node->read(&cnt, (void**)&file);
+        if (file == nullptr) return -ENOENT;
+        if (cnt < sizeof(Elf64_Ehdr)) return -ENOENT;
 
         Elf64_Ehdr* ehdr = (Elf64_Ehdr*)file;
 
@@ -311,13 +318,16 @@ namespace ELFLoader
                 return -1;
             }
 
-            if (interp_node->loaded_data == nullptr) interp_node->loaded_data = (uint8_t*)interp_node->load(&interp_node->loaded_data_size);
-            size_t cnt = interp_node->loaded_data_size;
-            uint8_t* interp = interp_node->loaded_data;
-
+            size_t cnt = 0;
+            uint8_t* interp;
+            interp_node->read(&cnt, (void**)&interp);
+            if (interp_node == nullptr) return -ENOENT;
+            if (cnt < sizeof(Elf64_Ehdr)) return -ENOENT;
+           
             Elf64_Ehdr* interp_ehdr = (Elf64_Ehdr*)interp;
-            uint64_t interp_entry = LoadInMemory(ptm, 0x100000000000, interp);
-            uint64_t main_entry = LoadInMemory(ptm, 0x80000000000, file);
+            uint64_t interp_entry = LoadInMemory(ptm, 0x100000000000 , interp, nullptr);
+            uint64_t lowest_header = 0x80000000000;
+            uint64_t main_entry = LoadInMemory(ptm, (ehdr->e_type == 1 || ehdr->e_type == 3) ? 0x80000000000 : 0, file, &lowest_header);
             //kprintf("main: %llx\n", main_entry);
             task->entry = (function)interp_entry;
             //kprintf("entry: %llx\n", interp_entry);
@@ -346,13 +356,15 @@ namespace ELFLoader
             char* execfn = new char[strlen(fp) + 1];
             strcpy(execfn, fp);
 
+            serialf("LOWEST: %llx\n", lowest_header);
+
             auxv_t auxv_entries[] = {
                 {AT_HWCAP, get_hwcap_x86()},
                 {AT_PAGESZ, 0X1000},
-                {AT_PHDR, 0x80000000000 + ehdr->e_phoff},
+                {AT_PHDR, lowest_header + ehdr->e_phoff},
                 {AT_PHENT, ehdr->e_phentsize},
                 {AT_PHNUM, ehdr->e_phnum},
-                {AT_BASE, 0x100000000000},
+                {AT_BASE, 0x100000000000 },
                 {AT_FLAGS, 0},
                 {AT_ENTRY, main_entry},
                 {AT_UID, ctask->uid},
@@ -377,7 +389,7 @@ namespace ELFLoader
             while(1);
 
         }else{
-            uint64_t entry = LoadInMemory(ptm, ehdr->e_type == 1 ? 0x80000000 : 0, file);
+            uint64_t entry = LoadInMemory(ptm, ehdr->e_type == 1 ? 0x80000000 : 0, file, nullptr);
             task->entry = (function)entry;
             ctask->state = task_state_t::DISABLED;
             task_scheduler::remove_task(ctask);

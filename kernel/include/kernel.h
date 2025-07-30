@@ -24,7 +24,6 @@
 //Drivers
 #include "drivers/serial.h"
 #include "drivers/audio/HDA.h"
-#include "drivers/audio/decoding/mp3.h"
 #include "other/ELFLoader.h"
 #include "drivers/rtc/rtc.h"
 #include "UserInput/ps2.h"

@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #define DIV_ROUND_UP(x, align) (((x) + (align) - 1) / (align))
+#define ALIGN(x, y) (((x) + (y - 1)) & ~(y - 1))
 
 uint64_t GetMemorySize(EFI_MEMORY_DESCRIPTOR* mMap, uint64_t mMapEntries, uint64_t mMapDescSize);
 void* memset(void* start, int value, uint64_t num);

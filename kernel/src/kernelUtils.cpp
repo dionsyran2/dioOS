@@ -4,6 +4,9 @@
 #include <uacpi/sleep.h>
 #include <uacpi/osi.h>
 #include <kerrno.h>
+#include <random.h>
+#include <devices/devices.h>
+#include <devices/proc.h>
 
 struct multiboot_tag_framebuffer* fb = nullptr;
 struct multiboot_tag_new_acpi* acpi;
@@ -176,7 +179,7 @@ void PrepareInterrupts(){
     SetIDTGate((void*)GPFault_Handler, 0xd, IDT_TA_InterruptGate, 0x08, &idtr); //General Protection Fault
     SetIDTGate((void*)MouseInt_Handler, 0x2c, IDT_TA_InterruptGate, 0x08, &idtr); //PS2 Mouse Handler
     SetIDTGate((void*)PitInt_Handler, 0x20, IDT_TA_InterruptGate, 0x08, &idtr); //PIT CHIP Handler
-    SetIDTGate((void*)HPETInt_Handler, 0x22, IDT_TA_InterruptGate, 0x08, &idtr); //PIT CHIP Handler
+    SetIDTGate((void*)HPETInt_Handler, 0x22, IDT_TA_InterruptGate, 0x08, &idtr); //HPET Handler
     SetIDTGate((void*)APICTimerInt_ASM_Handler, 0x23, IDT_TA_InterruptGate, 0x08, &idtr); //APIC TIMER Handler
     SetIDTGate((void*)PCIInt_Handler, PCI_INT_HANDLER_VECTOR, IDT_TA_InterruptGate, 0x08, &idtr); // PCI Legacy irq interrupts
     SetIDTGate((void*)SpuriousInt_Handler, 0xFF, IDT_TA_InterruptGate, 0x08, &idtr);
@@ -289,14 +292,45 @@ void InitKernel(uint32_t magic, multiboot_info* mb_info_addr){
     */
 }
 
+int acpi_init(void);
+
+int power_button_init(void);
+
+void SecondaryKernelInit(){
+    PrepareACPI(acpi);
+
+    acpi_init();
+    power_button_init();
+
+
+    PS2::Initialize();
+    PS2Mouse::Initialize();
+    PS2KB::Initialize();
+
+    PCI::EnumeratePCI(mcfg);
+    
+    init_vfs_dev();
+    init_proc_fs();
+    
+    if(!load_users()){
+        panic("Could not locate the user data!", "Make sure the root filesystem contains the necessary files!");
+    }
+
+    if (!globalRenderer->status){
+        boolean_flag_1 = true;
+        while(boolean_flag_1);
+    }
+
+    rand_init(to_unix_timestamp(c_time->second, c_time->minute, c_time->hour, c_time->day, c_time->month, c_time->year));
+
+
+    task_t* task = task_scheduler::create_process("Teletype Terminal Emulator", (function)session::CreateSession);
+    globalRenderer->Set(false);
+    task_scheduler::mark_ready(task);
+}
+
+
 int acpi_init(void) {
-    /*
-     * Start with this as the first step of the initialization. This loads all
-     * tables, brings the event subsystem online, and enters ACPI mode. We pass
-     * in 0 as the flags as we don't want to override any default behavior for now.
-     */
-
-
     uacpi_status ret = uacpi_initialize(0);
     if (uacpi_unlikely_error(ret)) {
         kprintf(0xFF0000, "[uACPI] ");
@@ -304,10 +338,6 @@ int acpi_init(void) {
         return -ENODEV;
     }
 
-    /*
-     * Load the AML namespace. This feeds DSDT and all SSDTs to the interpreter
-     * for execution.
-     */
     ret = uacpi_namespace_load();
     if (uacpi_unlikely_error(ret)) {
         kprintf(0xFF0000, "[uACPI] ");
@@ -315,11 +345,6 @@ int acpi_init(void) {
         return -ENODEV;
     }
 
-
-    /*
-     * Initialize the namespace. This calls all necessary _STA/_INI AML methods,
-     * as well as _REG for registered operation region handlers.
-     */
     ret = uacpi_namespace_initialize();
     if (uacpi_unlikely_error(ret)) {
         kprintf(0xFF0000, "[uACPI] ");
@@ -327,14 +352,6 @@ int acpi_init(void) {
         return -ENODEV;
     }
 
-    /*
-     * Tell uACPI that we have marked all GPEs we wanted for wake (even though we haven't
-     * actually marked any, as we have no power management support right now). This is
-     * needed to let uACPI enable all unmarked GPEs that have a corresponding AML handler.
-     * These handlers are used by the firmware to dynamically execute AML code at runtime
-     * to e.g. react to thermal events or device hotplug.
-     */
-    
     ret = uacpi_finalize_gpe_initialization();
     if (uacpi_unlikely_error(ret)) {
         kprintf(0xFF0000, "[uACPI] ");
@@ -342,11 +359,6 @@ int acpi_init(void) {
         return -ENODEV;
     }
 
-    /*
-     * That's it, uACPI is now fully initialized and working! You can proceed to
-     * using any public API at your discretion. The next recommended step is namespace
-     * enumeration and device discovery so you can bind drivers to ACPI objects.
-     */
     return 0;
 }
 
@@ -368,38 +380,6 @@ int power_button_init(void) {
     }
 
     return 0;
-}
-
-void SecondaryKernelInit(){
-    PrepareACPI(acpi);
-
-    acpi_init();
-    power_button_init();
-
-    //kprintf(0x000FF0, "Total system memory: %d MB\nSystem Reserved Memory: %d\nUsed Memory: %d\nFree Memory:%d\n", (GlobalAllocator.GetMemSize()/1024)/1024, (GlobalAllocator.GetReservedRAM()/1024)/1024, (GlobalAllocator.GetUsedRAM()/1024)/1024, (GlobalAllocator.GetFreeRAM()/1024)/1024);
-
-    PS2::Initialize();
-    PS2Mouse::Initialize();
-    PS2KB::Initialize();
-
-
-    //kprintf("X: %d, Y: %d\n", globalRenderer->targetFramebuffer->common.framebuffer_width, globalRenderer->targetFramebuffer->common.framebuffer_height);
-    PCI::EnumeratePCI(mcfg);
-
-    
-    if(!load_users()){
-        panic("Could not locate the user data!", "Make sure the root filesystem contains the necessary files!");
-    }
-
-    if (!globalRenderer->status){
-        boolean_flag_1 = true;
-        while(boolean_flag_1);
-    }
-
-
-    task_t* task = task_scheduler::create_process("Teletype Terminal Emulator", (function)session::CreateSession);
-    globalRenderer->Set(false);
-    task_scheduler::mark_ready(task);
 }
 
 

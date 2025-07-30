@@ -93,14 +93,7 @@ void SetupAPICTimer();
 int IRQtoGSI(int irq);
 uint32_t get_apic_id();
 uint64_t to_unix_timestamp(int sec, int min, int hour, int day, int month, int year);
-
-
-extern uint8_t TIME_DAY;
-extern uint8_t TIME_MONTH;
-extern uint16_t TIME_YEAR;
-extern uint8_t TIME_HOUR;
-extern uint8_t TIME_MINUTES;
-extern uint8_t TIME_SECONDS;
+uint64_t to_unix_timestamp(RTC::rtc_time_t* time);
 
 extern uint64_t LAPICAddress;
 extern uint64_t APICticsSinceBoot;

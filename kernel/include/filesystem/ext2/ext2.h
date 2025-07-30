@@ -10,7 +10,7 @@
 
 
 struct ext2_extended_superblock{
-    uint32_t first_free_inode;
+    uint32_t first_non_reserved_inode;
     uint16_t size_of_inode;
     uint16_t this_block_group;
     uint32_t optional_features;
@@ -196,9 +196,13 @@ namespace filesystem{
     class ext2{
         public:
         ext2(vblk_t* blk, uint64_t start_block, uint64_t last_block, PartEntry* gpt_entry);
-        ext2_inode* _read_inode(uint32_t inode);
-        void* _load_inode(ext2_inode* inode, uint32_t* length);
-
+        ext2_inode* read_inode(uint32_t inode);
+        void* load_inode(ext2_inode* inode, uint32_t* length);
+        bool write_inode(uint32_t inode, void* buff, uint32_t ln);
+        int mkdir(uint32_t parent_inode, const char* name, ext2_directory** out);
+        int create_file(uint32_t parent_inode, const char* name, ext2_directory** out);
+        vnode_t* create_and_mount_dir(ext2_directory* dir, ext2_inode* inode, vnode_t* parent);
+        void mount_dir(uint32_t inode, vnode_t* parent, bool sub);
         private:
         vblk_t* blk;
         
@@ -221,6 +225,7 @@ namespace filesystem{
         uint64_t block_group_table_bytes;
 
         uint32_t inode_size_in_bytes;
+        uint32_t inodes_per_group;
 
         ext2_superblock* superblock;
         ext2_block_group_descriptor* block_group_table;
@@ -230,6 +235,7 @@ namespace filesystem{
         void _save_superblock();
         void _parse_superblock();
         void _load_block_group_descriptor();
+        void _save_block_group_descriptor();
         uint32_t _number_of_blocks(ext2_inode* inode);
         uint32_t _number_of_blocks_direct(ext2_inode* inode);
         uint32_t _number_of_blocks_indirect_l1(uint32_t singly_indirect_block_pointer); // single indirect
@@ -242,7 +248,23 @@ namespace filesystem{
         uint32_t* _get_block_table(ext2_inode* inode, uint32_t* length);
         uint64_t _block_to_sector(uint64_t block);
         char* _mount_fs();
-        void _mount_dir(uint32_t inode, vnode_t* parent, bool sub);
-        vnode_t* _create_and_mount_dir(ext2_directory* dir, ext2_inode* inode, vnode_t* parent);
+        bool _save_inode_entry(uint32_t inode, ext2_inode* inode_entry);
+        uint32_t _find_free_inode();
+        bool _mark_inode(uint32_t inode, bool v);
+        uint32_t _find_free_block();
+        bool _mark_block(uint32_t block, bool v);
+        void _clear_block(uint32_t block);
+        void _inode_allocate_singly_indirect_block(ext2_inode* inode);
+        void _inode_allocate_double_indirect_block(ext2_inode* inode);
+        void _inode_allocate_triple_indirect_block(ext2_inode* inode);
+        bool _inode_add_block_indirect_l1(uint32_t singly_indirect_block_pointer, uint32_t block);
+        bool _inode_add_block_indirect_l2(uint32_t doubly_indirect_block_pointer, uint32_t block);
+        bool _inode_add_block_indirect_l3(uint32_t triple_indirect_block_pointer, uint32_t block);
+        void _inode_add_block(ext2_inode* inode, uint32_t block);
+        size_t _inode_truncate_indirect_l1(uint32_t singly_indirect_block_pointer, size_t block_count);
+        size_t _inode_truncate_indirect_l2(uint32_t doubly_indirect_block_pointer, size_t block_count);
+        size_t _inode_truncate_indirect_l3(uint32_t triple_indirect_block_pointer, size_t block_count);
+        uint32_t _inode_truncate(ext2_inode* inode, size_t num_of_blocks);
+        bool _push_dir_entry(uint32_t parent, ext2_directory* directory_entry);
     };
 }

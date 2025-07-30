@@ -44,10 +44,11 @@ void BasicRenderer::drawChar(unsigned int color, char chr, unsigned int xOff, un
 
 void BasicRenderer::draw_char_tty(uint32_t color, uint32_t bg, char chr, unsigned int xOff, unsigned int yOff, bool underline){
     char* PSF1_FontPtr = (char*)PSF1_Font->glyphBuffer + (chr * PSF1_Font->psf1_Header->charsize);
+    if ((uint64_t)PSF1_FontPtr > GlobalAllocator.GetMemSize()) return;
     for (unsigned long y=yOff; y<yOff + 16; y++){
         for(unsigned long x = xOff; x<xOff + 8; x++){
-            if((*PSF1_FontPtr & (0b10000000 >> (x - xOff))) > 0){
-                if (x < 0 || x > targetFramebuffer->common.framebuffer_width - 1 || y < 0 || y > targetFramebuffer->common.framebuffer_height - 1) continue;
+            if (x < 0 || x > targetFramebuffer->common.framebuffer_width - 1 || y < 0 || y > targetFramebuffer->common.framebuffer_height - 1) continue;
+            if(((*PSF1_FontPtr) & (0b10000000 >> (x - xOff))) > 0){
                 PutPixFB(x, y, color);
             }else{
                 PutPixFB(x, y, bg);

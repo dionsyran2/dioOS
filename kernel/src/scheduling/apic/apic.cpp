@@ -7,14 +7,6 @@ uint64_t LAPICAddress;
 uint64_t APICticsSinceBoot = 0;
 uint64_t Ticks = 0;
 
-uint8_t TIME_DAY;
-uint8_t TIME_MONTH;
-uint16_t TIME_YEAR;
-uint8_t TIME_HOUR;
-uint8_t TIME_MINUTES;
-uint8_t TIME_SECONDS;
-
-
 int is_leap_year(int year) {
     // Leap year calculation: divisible by 4, but not by 100 unless divisible by 400
     if ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)) {
@@ -34,6 +26,7 @@ int get_days_in_month(int month, int year) {
     
     return days_in_month[month - 1]; // Return the number of days in the month
 }
+
 
 uint64_t to_unix_timestamp(int sec, int min, int hour, int day, int month, int year) {
     int y = year;
@@ -57,38 +50,45 @@ uint64_t to_unix_timestamp(int sec, int min, int hour, int day, int month, int y
     return ((days * 24 + hour) * 60 + min) * 60 + sec;
 }
 
-RTC::rtc_time_t* c_time;
+uint64_t to_unix_timestamp(RTC::rtc_time_t* time){
+    return to_unix_timestamp(time->second, time->minute, time->hour, time->day, time->month, time->year);
+}
+RTC::rtc_time_t time;
+RTC::rtc_time_t* c_time = nullptr;
 void update_time(){
-    //need to fix the lapic timer calibration so it doesnt drift off
-    RTC::rtc_time_t time = RTC::read_rtc_time();
-    if (c_time == nullptr) c_time = new RTC::rtc_time_t();
-    memcpy(c_time, &time, sizeof(RTC::rtc_time_t));
-    
-    return;
-    TIME_SECONDS++;
-    if (TIME_SECONDS > 59){
-        TIME_SECONDS = 0;
-        TIME_MINUTES++;
+    if (c_time == nullptr) {
+        c_time = &time; // pretend you never saw that
+        RTC::rtc_time_t rtc_time = RTC::read_rtc_time();
+        memcpy(c_time, &rtc_time, sizeof(RTC::rtc_time_t));
+    } 
+    c_time->msec++;
+    if (c_time->msec >= 1000){
+        c_time->msec = 0;
+        c_time->second++;
+    }
+    if (c_time->second > 59){
+        c_time->second = 0;
+        c_time->minute++;
     }
 
-    if (TIME_MINUTES > 59){
-        TIME_MINUTES = 0;
-        TIME_HOUR++;
+    if (c_time->minute > 59){
+        c_time->minute = 0;
+        c_time->hour++;
     }
 
-    if (TIME_HOUR > 23){
-        TIME_HOUR = 0;
-        TIME_DAY++;
+    if (c_time->hour > 23){
+        c_time->hour = 0;
+        c_time->day++;
     }
 
-    if (TIME_DAY > get_days_in_month(TIME_MONTH - 1, TIME_YEAR)){
-        TIME_DAY = 1;
-        TIME_MONTH++;
+    if (c_time->day > get_days_in_month(c_time->month, c_time->year)){
+        c_time->day = 1;
+        c_time->month++;
     }
 
-    if (TIME_MONTH > 12){
-        TIME_MONTH = 1;
-        TIME_YEAR++;
+    if (c_time->month > 12){
+        c_time->month = 1;
+        c_time->year++;
     }
 }
 
@@ -302,9 +302,7 @@ uint64_t GetAPICTick(){
 void TickAPIC(){
     APICticsSinceBoot++;
     Ticks++;
-    if (Ticks % 1000 == 0){
-        update_time(); // update every 1 second
-    }
+    update_time();
 }
 
 

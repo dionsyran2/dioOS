@@ -51,12 +51,12 @@ namespace session{
         do {
             tty->ops.write("login: ", 7, tty);
             size_t u_size = 0;
-            char* username = (char*)tty->ops.load(&u_size, tty);
+            char* username = (char*)tty->ops.read(&u_size, tty);
             if (u_size > 0) username[u_size - 1] = '\0';
 
             tty->ops.write("password: ", 10, tty);
             size_t p_size = 0;
-            char* password = (char*)tty->ops.load(&p_size, tty);
+            char* password = (char*)tty->ops.read(&p_size, tty);
             if (p_size > 0) password[p_size - 1] = '\0';
 
 
@@ -73,7 +73,7 @@ namespace session{
             do{
                 tty->ops.write("Enter executable path: ", 23, tty);
                 size_t e_size = 0;
-                char* exec_name = (char*)tty->ops.load(&e_size, tty);
+                char* exec_name = (char*)tty->ops.read(&e_size, tty);
                 if (e_size != 0) exec_name[e_size - 1] = '\0'; // replace \n with \0
 
                 vnode_t* exec = vfs::resolve_path(exec_name);

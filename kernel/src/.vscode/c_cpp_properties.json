@@ -6,8 +6,8 @@
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/ACPI/include",
                 "${workspaceFolder}/acpica/include",
-                "/home/dioni/grubOS/kernel/include",
-                "/home/dioni/grubOS/kernel/include/uACPI/include"
+                "/home/dioni/dioOS/kernel/include",
+                "/home/dioni/dioOS/kernel/include/uACPI/include"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",

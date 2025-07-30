@@ -26,17 +26,17 @@ extern "C" uint64_t syscall_entry_cpp(uint64_t a1, uint64_t a2, uint64_t a3, uin
     if (num >= MAX_SYSCALLS || syscall_table[num] == NULL) {
         #ifdef LOG_SYSCALLS
         globalRenderer->Set(true);
-        kprintf("SYSCALL %d %llx %llx %llx %llx %llx %llx\n", num, a1, a2, a3, a4, a5, a6);
-        while(1);
+        serialf("\e[0;31mSYSCALL %d %llx %llx %llx %llx %llx %llx\e[0m\n", num, a1, a2, a3, a4, a5, a6);
+        //while(1);
         #endif
         return -ENOSYS; // Syscall not implemented
     }
-    
-    // call the handler
-    uint64_t ret = syscall_table[num](a1, a2, a3, a4, a5, a6);
 
     // put the args in an array (makes it easier to log them)
     uint64_t args[6] = {a1, a2, a3, a4, a5, a6};
+    
+    // call the handler
+    uint64_t ret = syscall_table[num](a1, a2, a3, a4, a5, a6);
 
     #ifdef LOG_SYSCALLS
     // log the call
@@ -75,6 +75,7 @@ int sys_uname(struct utsname *buf){
 int sys_clock_gettime(int clk_id, struct timespc* user_tp) {
     if (clk_id == 0){
         user_tp->tv_sec = to_unix_timestamp(c_time->second, c_time->minute, c_time->hour, c_time->day, c_time->month, c_time->year);
+        user_tp->tv_nsec = c_time->msec * 1000000;
     }
     return 0;
 }
@@ -87,6 +88,25 @@ int sys_nanosleep(const struct timespc *duration, struct timespc* rem){
     return 0;
 }
 
+int sys_time(uint64_t* time){
+    if (time == nullptr) return -EFAULT;
+    *time = to_unix_timestamp(c_time->second, c_time->minute, c_time->hour, c_time->day, c_time->month, c_time->year);
+    return 0;
+}
+
+int sys_gettimeofday(struct timeval* tv, struct timezone* tz){
+    if (tv != nullptr) tv->tv_sec = to_unix_timestamp(c_time->second, c_time->minute, c_time->hour, c_time->day, c_time->month, c_time->year);
+    tv->tv_usec = c_time->msec * 1000;
+    
+    if (tz != nullptr) {
+        tz->tz_dsttime = 0; // At some point I may add timezones
+        tz->tz_minuteswest = 0;
+    }
+    return 0;
+}
+
+
+
 void register_syscall(){
     register_thread_syscalls();
     register_fs_syscalls();
@@ -95,6 +115,8 @@ void register_syscall(){
     register_syscall(SYSCALL_UNAME, (syscall_handler_t)sys_uname);
     register_syscall(SYSCALL_GETTIME, (syscall_handler_t)sys_clock_gettime);
     register_syscall(SYSCALL_NANOSLEEP, (syscall_handler_t)sys_nanosleep);
+    register_syscall(SYSCALL_TIME, (syscall_handler_t)sys_time);
+    register_syscall(SYSCALL_GETTIMEOFDAY, (syscall_handler_t)sys_gettimeofday);
 
 
     int cnt = 0;
@@ -106,6 +128,7 @@ void register_syscall(){
     kprintf(0x00FFF0, "[SYSCALLS] ");
     kprintf("registered %d syscalls\n", cnt);
 }
+
 
 void setup_syscalls(){
     uint64_t efer = read_msr(IA32_EFER);

@@ -72,14 +72,6 @@ int sys_kill(int pid, int sig){
     return 0;
 }
 
-int sys_pselect(){
-    task_t* ctask = task_scheduler::get_current_task();
-    asm ("sti");
-    while(ctask->tty->data_available == false);
-    asm ("cli");
-    return 1;
-}
-
 int sys_sigreturn(){
     task_t* ctask = task_scheduler::get_current_task();
 
@@ -115,7 +107,6 @@ void register_sig_syscalls(){
     register_syscall(SYSCALL_SIGACTION, (syscall_handler_t)sys_rt_sigaction);
     register_syscall(SYSCALL_PRLIMIT, (syscall_handler_t)sys_prlimit64);
     register_syscall(SYSCALL_KILL, (syscall_handler_t)sys_kill);
-    register_syscall(SYSCALL_PSELECT, (syscall_handler_t)sys_pselect);
     register_syscall(SYSCALL_SIGRETURN, (syscall_handler_t)sys_sigreturn);
     register_syscall(SYSCALL_SIGALTSTACK, (syscall_handler_t)sys_sigaltstack);
 }

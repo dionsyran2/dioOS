@@ -2,6 +2,7 @@
 #include <syscalls/linux/thread.h>
 #include <other/ELFLoader.h>
 #include <cpu.h>
+#include <random.h>
 
 #define ARCH_SET_FS     0x1002
 #define ARCH_GET_FS     0x1003
@@ -164,7 +165,16 @@ int sys_wait4(int pid, int *wstatus, int options, struct rusage *rusage){
 
     size_t num_of_children = 0;
     task_t** children = task_scheduler::get_children(ctask->pid, &num_of_children);
-    if (num_of_children == 0) return -ECHILD;
+
+    bool found = false;
+    for (int i = 0; i < num_of_children; i++){
+        if (children[i]->state == ZOMBIE) continue;
+        found = true;
+        break; 
+    }
+
+    if (!found) return -ECHILD;
+
 
     uint64_t user = user_syscall_stack;
     asm ("sti");
@@ -189,7 +199,7 @@ int sys_wait4(int pid, int *wstatus, int options, struct rusage *rusage){
     }
     
 
-    return ret ? ret : -1; // since blocking fails, return an error. most apps will recall wait()
+    return ret ? ret : -1;
 }
 
 int sys_execve(char *pathname, char *const argv[], char *const envp[]){
@@ -294,15 +304,27 @@ int sys_sched_getaffinity(unsigned int pid, size_t cpusetsize, unsigned long* ma
     return 8;
 }
 
+extern "C" int sys_clone_child_entry(){
+    asm ("cli");
+
+    task_t* ctask = task_scheduler::get_current_task();
+    user_syscall_stack = ctask->rsi;
+
+    __asm__ __volatile__("mov %0, %%rsp" :: "r" (ctask->rdx));
+    __asm__ __volatile__("mov %0, %%rbp" :: "r" (ctask->rdi));
+
+    return 0;
+}
+
 int sys_clone(unsigned long flags, void *stack, int *parent_tid, int *child_tid, unsigned long tls){
-    uint64_t rsp = 0;
+    /*uint64_t rsp = 0;
     uint64_t rbp = 0;
     __asm__ __volatile__("mov %%rsp, %0" : "=r" (rsp));
+    __asm__ __volatile__("mov %%rbp, %0" : "=r" (rbp));
 
     task_t* ctask = task_scheduler::get_current_task();
     task_t* child = task_scheduler::clone(ctask, flags, (uint64_t)stack, tls, (function)sys_fork_child_entry);
     rsp = child->syscall_stack + (rsp - (ctask->syscall_stack));
-
     if (flags & CLONE_CHILD_CLEARTID) *child_tid = 0;
     if (flags & CLONE_PARENT_SETTID) *parent_tid = child->tid;
     if (flags & CLONE_CHILD_SETTID) *child_tid = child->tid;
@@ -310,30 +332,112 @@ int sys_clone(unsigned long flags, void *stack, int *parent_tid, int *child_tid,
     child->flags &= ~TASK_CPL3; // make sure the entry runs in cpl 0;
     child->rsp = (uint64_t)GlobalAllocator.RequestPage() + 0x1000;
     child->rdx = rsp;
+    child->rdi = rbp;
     child->rsi = (uint64_t)stack;
 
     task_scheduler::mark_ready(child);
 
     ctask->counter = TASK_SCHEDULER_COUNTER_DEFAULT;
+    return child->pid;*/
+
+    uint64_t rsp = 0;
+    uint64_t rbp = 0;
+    __asm__ __volatile__("mov %%rsp, %0" : "=r" (rsp));
+    __asm__ __volatile__("mov %%rbp, %0" : "=r" (rbp));
+
+    task_t* ctask = task_scheduler::get_current_task();
+    task_t* child = task_scheduler::fork_process(ctask, (function)sys_clone_child_entry);
+
+    if (flags & CLONE_PARENT_SETTID) *parent_tid = child->tid;
+    if (flags & CLONE_CHILD_SETTID) *child_tid = child->tid;
+
+    child->flags &= ~TASK_CPL3; // make sure the entry runs in cpl 0;
+    child->rsp = (uint64_t)GlobalAllocator.RequestPage() + 0x1000;
+    child->rdx = rsp;
+    child->rdi = rbp;
+    child->rsi = user_syscall_stack;
+    task_scheduler::mark_ready(child);
+    ctask->counter = TASK_SCHEDULER_COUNTER_DEFAULT;
     return child->pid;
 }
 
-int sys_futex(uint32_t *uaddr, int futex_op, uint32_t val, const struct timespc *timeout){
-    uint64_t start_time = APICticsSinceBoot;
-    asm ("sti");
-    while(1){
-        if (futex_op == FUTEX_WAIT){
-            if (*uaddr != val) break;
-        }else if (futex_op == 0x80){
-            return 1;
-        }else return -ENOSYS;
+static const int FUTEX_HASHTABLE_SIZE = 256;
 
-        if (timeout){
-            if ((start_time + (timeout->tv_sec * 1000) + (timeout->tv_nsec / 1000000)) >= start_time) return -ETIMEDOUT;
+struct futex_waiter {
+    task_t* task;
+    futex_waiter* next;
+};
+
+struct futex_queue {
+    uint32_t* addr;
+    futex_waiter* head;
+    spinlock_t lock;
+    futex_queue() : addr(nullptr), head(nullptr) { spin_unlock(&lock); }
+};
+
+// simple chained hash table
+static futex_queue futex_table[FUTEX_HASHTABLE_SIZE];
+
+static inline uint32_t futex_hash(uint32_t* uaddr) {
+    return (((uintptr_t)uaddr) >> 2) % FUTEX_HASHTABLE_SIZE;
+}
+
+int sys_futex(uint32_t *uaddr, int futex_op, uint32_t val, const struct timespc *timeout) {
+    int cmd = futex_op & FUTEX_CMD_MASK;
+    bool is_private = futex_op & FUTEX_PRIVATE_FLAG;
+    uint32_t h = futex_hash(uaddr);
+    futex_queue& q = futex_table[h];
+    bool use_realtime = futex_op & FUTEX_CLOCK_REALTIME;
+
+    switch (cmd) {
+    case FUTEX_WAIT: {
+        uint32_t cur = *uaddr;
+        if (cur != val) return -EAGAIN;
+
+        spin_lock(&q.lock);
+        futex_waiter waiter{ task_scheduler::get_current_task(), q.head };
+        q.head = &waiter;
+        spin_unlock(&q.lock);
+
+        task_t* self = task_scheduler::get_current_task();
+        if (timeout) {
+            uint64_t deadline = APICticsSinceBoot +
+                timeout->tv_sec * 1000 +
+                timeout->tv_nsec / (1000000000 / 1000);
+            task_scheduler::schedule_until(deadline, task_state_t::BLOCKED);
+            spin_lock(&q.lock);
+            futex_waiter** ptr = &q.head;
+            while (*ptr) {
+                if ((*ptr)->task == self) {
+                    *ptr = (*ptr)->next;
+                    break;
+                }
+                ptr = &(*ptr)->next;
+            }
+            spin_unlock(&q.lock);
+            if (APICticsSinceBoot >= deadline) return -ETIMEDOUT;
+        } else {
+            task_scheduler::yield();
         }
+        return 0;
     }
-    asm ("cli");
-    return 0;
+
+    case FUTEX_WAKE: {
+        int woken = 0;
+        spin_lock(&q.lock);
+        while (q.head && woken < (int)val) {
+            futex_waiter* w = q.head;
+            q.head = w->next;
+            task_scheduler::unblock(w->task);
+            woken++;
+        }
+        spin_unlock(&q.lock);
+        return woken;
+    }
+
+    default:
+        return -ENOSYS;
+    }
 }
 
 int sys_tkill(int tid, int sig){
@@ -353,8 +457,73 @@ int sys_tkill(int tid, int sig){
 
 
     target->pending_signals_thread |= (1UL << sig);
+    return 0;
+}
+
+int sys_tgkill(int tgid, int tid, int sig){
+    task_t* ctask = task_scheduler::get_current_task();
+    task_t* target = nullptr;
+
+    task_t* t = task_list;
+    while (t != nullptr){
+        if (t->pgid == ctask->pgid && t->tid == tid){
+            target = t;
+            break;
+        }
+        t = t->next;
+    }
+
+    if (target == nullptr) return -ESRCH;
+
+
     target->pending_signals_thread |= (1UL << sig);
     return 0;
+}
+
+int sys_getpgrp(){
+    task_t* ctask = task_scheduler::get_current_task();
+    return ctask->pgid;
+}
+
+int sys_getrandom(uint8_t* buf, size_t buflen, unsigned int flags){
+    for (int i = 0; i < buflen; i++){
+        buf[i] = (uint8_t)(random() & 0xFF);
+    }
+    return buflen;
+}
+
+int sys_setresuid(int ruid, int euid, int suid){
+    task_t* ctask = task_scheduler::get_current_task();
+    ctask->uid = ruid;
+    ctask->euid = euid;
+    return 0;
+}
+
+int sys_setresgid(int rgid, int egid, int sgid){
+    task_t* ctask = task_scheduler::get_current_task();
+    ctask->gid = rgid;
+    ctask->egid = egid;
+    return 0;
+}
+
+int sys_getresuid(int* ruid, int* euid, int* suid){
+    task_t* ctask = task_scheduler::get_current_task();
+    *ruid = ctask->uid;
+    *euid = ctask->euid;
+    *suid = ctask->uid;
+    return 0;
+}
+
+int sys_getresgid(int* rgid, int* egid, int* sgid){
+    task_t* ctask = task_scheduler::get_current_task();
+    *rgid = ctask->gid;
+    *egid = ctask->egid;
+    *sgid = ctask->gid;
+    return 0;
+}
+
+int stub(){
+    return 0; // :)
 }
 
 void register_thread_syscalls(){
@@ -375,11 +544,21 @@ void register_thread_syscalls(){
     register_syscall(SYSCALL_SETUID, (syscall_handler_t)sys_setuid);
     register_syscall(SYSCALL_GETTID, (syscall_handler_t)sys_gettid);
 
+    register_syscall(SYSCALL_SETRESUID, (syscall_handler_t)sys_setresuid);
+    register_syscall(SYSCALL_SETRESGID, (syscall_handler_t)sys_setresgid);
+    register_syscall(SYSCALL_GETRESUID, (syscall_handler_t)sys_getresuid);
+    register_syscall(SYSCALL_GETRESGID, (syscall_handler_t)sys_getresgid);
+
     register_syscall(SYSCALL_FORK, (syscall_handler_t)sys_fork);
     register_syscall(SYSCALL_WAIT4, (syscall_handler_t)sys_wait4);
     register_syscall(SYSCALL_EXECVE, (syscall_handler_t)sys_execve);
     register_syscall(SYSCALL_GETAFFINITY, (syscall_handler_t)sys_sched_getaffinity);
     register_syscall(SYSCALL_CLONE, (syscall_handler_t)sys_clone);
     register_syscall(SYSCALL_FUTEX, (syscall_handler_t)sys_futex);
-    register_syscall(SYSCALL_TKILL, (syscall_handler_t)sys_futex);
+    register_syscall(SYSCALL_TKILL, (syscall_handler_t)sys_tkill);
+    register_syscall(SYSCALL_TGKILL, (syscall_handler_t)sys_tgkill);
+    register_syscall(SYSCALL_GETPGRP, (syscall_handler_t)sys_getpgrp);
+    register_syscall(SYSCALL_GETRANDOM, (syscall_handler_t)sys_getrandom);
+    register_syscall(273, (syscall_handler_t)stub);
+
 }

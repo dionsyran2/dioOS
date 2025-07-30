@@ -84,6 +84,10 @@ namespace ELFLoader{
     #define HWCAP_X86_TM         (1 << 29)
     #define HWCAP_X86_PBE        (1 << 30)
 
+    #define PF_R		0x4
+    #define PF_W		0x2
+    #define PF_X		0x1
+
     typedef struct {
         uint64_t r_offset;   // Where to write
         uint64_t r_info;     // Symbol + type

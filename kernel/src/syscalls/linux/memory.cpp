@@ -25,9 +25,10 @@ unsigned long sys_brk(unsigned long brk){
     return brk;
 }
 
+#include <syscalls/linux/filesystem.h>
+
 unsigned long sys_mmap(void *addr, size_t length, int prot, int flags, int fd, uint64_t offset){
     //serialf("sys_mmap(%llx, %u, %d, %d, %d, %u)\n\r", addr, length, prot, flags, fd, offset);
-
     task_t* ctask = task_scheduler::get_current_task();
     PageTableManager* ptm = ctask->ptm;
     
@@ -51,6 +52,10 @@ unsigned long sys_mmap(void *addr, size_t length, int prot, int flags, int fd, u
         memset(page, 0, 0x1000);
         ptm->MapMemory(vaddr, page);
         ptm->SetPageFlag(vaddr, PT_Flag::UserSuper, true);
+    }
+
+    if (fd > 0){
+        sys_pread64(fd, (char*)addr, length, offset);
     }
     return (unsigned long)addr;
 }
@@ -99,7 +104,7 @@ int sys_mprotect(void* addr, size_t len, int prot){
         }
 
         if ((prot & PROT_EXEC) == 0){
-            ptm->SetPageFlag(caddr, PT_Flag::NX, true);
+            //ptm->SetPageFlag(caddr, PT_Flag::NX, true);
         }else{
             ptm->SetPageFlag(caddr, PT_Flag::NX, false);
         }

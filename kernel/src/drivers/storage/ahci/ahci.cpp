@@ -310,46 +310,78 @@ namespace AHCI{
         return true;
     }
 
+    // Find a free command list slot
+    int find_cmdslot(Port *port)
+    {
+        // If not set in SACT and CI, the slot is free
+        uint32_t slots = (port->hbaPort->sataActive | port->hbaPort->commandIssue);
+        for (int i=0; i < 32; i++)
+        {
+            if ((slots&1) == 0)
+                return i;
+            slots >>= 1;
+        }
+        return -1;
+    }
+
+    #define MAX_SECTORS_PER_REQ ((256 * 8 * 1024) / 512)
     bool Port::Read(uint64_t Sector, uint32_t SectorCount, void* Buffer){
-        if (SectorCount > ((4 * 1024 * 1024) / 512)){
-            uint32_t SectorCnt = SectorCount;
-            uint32_t max_sectors = ((4 * 1024 * 1024) / 512);
-            uint32_t offset = 0;
-            while (SectorCnt){
-                uint32_t to_read = SectorCnt > max_sectors ? max_sectors : SectorCnt;
-                bool ret = Read(Sector + offset, to_read, (uint8_t*)Buffer + offset);
-                if (ret == false) return false;
-                offset += to_read * 512;
-                SectorCnt -= to_read;
+        if (SectorCount > MAX_SECTORS_PER_REQ){
+            while (SectorCount > 0){
+                uint32_t to_read = MAX_SECTORS_PER_REQ;
+                if (SectorCount < to_read) to_read = SectorCount;
+                bool ret = Read(Sector, to_read, Buffer);
+                Sector += to_read;
+                SectorCount -= to_read;
+                Buffer = (void*)((uint64_t)Buffer + (to_read * 512));
+                if (!ret) return false;
             }
             return true;
         }
-
-        while ((hbaPort->taskFileData & (ATA_DEV_BUSY | ATA_DEV_DRQ)));
-
-        uint32_t SectorL = (uint32_t)Sector;
-        uint32_t SectorH = (uint32_t)(Sector >> 32);
-
-        hbaPort->interruptStatus = (uint32_t)-1; // Clear pending interrupt bits
+        
+        hbaPort->interruptStatus = (uint32_t)-1;
+        int spin = 0;
+        int slot = find_cmdslot(this);
+        if (slot == -1) return false;
 
         HBACommandHeader* CommandHeader = (HBACommandHeader*)hbaPort->commandListBase;
+        CommandHeader += slot;
         CommandHeader->commandFISLength = sizeof(FIS_REG_H2D)/ sizeof(uint32_t); //command FIS size;
         CommandHeader->write = 0; // this is a read command
-        CommandHeader->prdtLength = 1;
+        CommandHeader->prdtLength = (uint16_t)((SectorCount-1) >> 4) + 1;
 
         HBACommandTable* CommandTable = (HBACommandTable*)(CommandHeader->commandTableBaseAddress);
         memset(CommandTable, 0, sizeof(HBACommandTable) + ((CommandHeader->prdtLength-1) * sizeof(HBAPRDTEntry)));
 
-        CommandTable->prdtEntry[0].dataBaseAddress = (uint32_t)(uint64_t)Buffer;
-        CommandTable->prdtEntry[0].dataBaseAddressUpper = (uint32_t)((uint64_t)Buffer >> 32);
-        CommandTable->prdtEntry[0].byteCount = (SectorCount<<9)-1; // 512 bytes per sector
-        CommandTable->prdtEntry[0].interruptOnCompletion = 1;
-
         FIS_REG_H2D* CommandFIS = (FIS_REG_H2D*)(&CommandTable->commandFIS);
+        
+        CommandFIS->countLow = SectorCount & 0xFF;
+        CommandFIS->countHigh = (SectorCount >> 8) & 0xFF;
+
+
+        // 8K bytes (16 sectors) per PRDT
+        for (int i=0; i<CommandHeader->prdtLength; i++)
+        {
+            uint8_t to_read = 16;
+            if (SectorCount < 16) to_read = SectorCount;
+            if (SectorCount == 0) break;
+
+            CommandTable->prdtEntry[i].dataBaseAddress = (uint32_t)((uint64_t)Buffer & 0xFFFFFFFF);
+            CommandTable->prdtEntry[i].dataBaseAddressUpper = (uint32_t)((uint64_t)Buffer >> 32);
+
+            CommandTable->prdtEntry[i].byteCount = (to_read * 512) - 1;
+            CommandTable->prdtEntry[i].interruptOnCompletion = 0;
+            Buffer = (void*)((uint64_t)Buffer + (to_read * 512));
+            SectorCount -= to_read;	// 16 sectors
+        }
+        CommandTable->prdtEntry[CommandHeader->prdtLength - 1].interruptOnCompletion = 1;
 
         CommandFIS->fisType = FIS_TYPE_REG_H2D;
         CommandFIS->commandControl = 1; // command
         CommandFIS->command = ATA_CMD_READ_DMA_EX;
+
+        uint32_t SectorL = (uint32_t)Sector;
+        uint32_t SectorH = (uint32_t)(Sector >> 32);
 
         CommandFIS->lba0 = (uint8_t)SectorL;
         CommandFIS->lba1 = (uint8_t)(SectorL >> 8);
@@ -359,29 +391,61 @@ namespace AHCI{
         CommandFIS->lba5 = (uint8_t)(SectorH >> 8) & 0x0F; // Only lower 4 bits needed
 
 
-        CommandFIS->deviceRegister = 1<<6; //LBA mode
-
-        CommandFIS->countLow = SectorCount & 0xFF;
-        CommandFIS->countHigh = (SectorCount >> 8) & 0xFF;
-
-        uint64_t Spin = 0;
-
-        while ((hbaPort->taskFileData & (ATA_DEV_BUSY | ATA_DEV_DRQ)) && Spin < 1000000){
-            Spin ++;
+        CommandFIS->deviceRegister = 1 << 6; // LBA mode
+        while ((hbaPort->taskFileData & (ATA_DEV_BUSY | ATA_DEV_DRQ)) && spin < 1000000)
+        {
+            spin++;
         }
 
-        if (Spin == 1000000) {
+        if (spin == 1000000)
+        {
+            serialf("\e[0;35m[AHCI] Port is hung\e[0m\n");
             return false;
         }
 
-        hbaPort->commandIssue = 1;
-
-        while (true){
+        hbaPort->commandIssue = 1 << slot;
+        spin = 0;
+        asm ("sti");
+        while (spin < 100){
+            Sleep(1);
+            spin++;
             if((hbaPort->commandIssue == 0)) break;
             if(hbaPort->interruptStatus & HBA_PxIS_TFES)
             {
                 return false;
             }
+        }
+
+        if (spin == 100){
+            serialf("\e[0;35m[AHCI] Could not issue command (Timed out).\e[0m\n");
+        }
+
+        spin = 0;
+        // Wait for completion
+        while (spin < 100)
+        {
+            Sleep(1);
+            spin++;
+            // In some longer duration reads, it may be helpful to spin on the DPS bit 
+            // in the PxIS port field as well (1 << 5)
+            if ((hbaPort->commandIssue & (1 << slot)) == 0) 
+                break;
+            if (hbaPort->interruptStatus & HBA_PxIS_TFES)	// Task file error
+            {
+                serialf("\e[0;35m[AHCI] Disk read error (Task file error)\e[0m\n");
+                return false;
+            }
+        }
+        
+        if (spin == 100){
+            serialf("\e[0;35m[AHCI] Disk read error (Timed out).\e[0m\n");
+        }
+
+        // Check again
+        if (hbaPort->interruptStatus & HBA_PxIS_TFES)
+        {
+            serialf("\e[0;35m[AHCI] Disk read error (Task file error)!\e[0m\n");
+            return false;
         }
 
         return true;

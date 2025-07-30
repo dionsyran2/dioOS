@@ -6,6 +6,7 @@ extern next_syscall_stack
 extern user_syscall_stack
 
 syscall_entry:
+    sti
     mov cr2, rax ; use cr2 as a scratch register to save the original rax value
     mov rax, [next_syscall_stack] ; load the kernel stack in rax (next_syscall_stack is changed by the scheduler for each task)
     xchg rax, rsp ; exchange rax with rsp to load the kstack in rsp and save the user stack in rax

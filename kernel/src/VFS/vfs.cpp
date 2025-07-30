@@ -3,30 +3,71 @@
 #include <cstr.h>
 #include <kerrno.h>
 
+int vnode_t::open(){
+    ref_cnt++;
+    return 0;
+}
+
+int vnode_t::close(){
+    ref_cnt--;
+    if (ref_cnt == 0){
+        if (data != nullptr) free(data);
+        data_size = 0;
+        data = nullptr;
+    }
+    return 0;
+}
+
 int vnode_t::iocntl(int op, char* argp){
     if (ops.iocntl != nullptr){
         return ops.iocntl(op, argp, this);
     }
+    serialf("IOCNTL ENOSYS %s\n", vfs::get_full_path_name(this));
     return -ENOSYS;
 }
 
-void* vnode_t::load(size_t* cnt){
-    if (ops.load != nullptr){
-        return ops.load(cnt, this);
+int vnode_t::read(size_t* cnt, void** buf){
+    if (ops.read != nullptr){
+        if (type != VFIFO && type != VCHR && (flags & VFS_NO_CACHE) == 0){
+            if (data == nullptr){
+                size_t c = 0;
+                data = (uint8_t*)ops.read(&c, this);
+                data_size = c;
+            }
+            *buf = (void*)data;
+            *cnt = data_size;
+            return 0;
+        }else{
+            *buf = ops.read(cnt, this);
+            return 0;
+        }
     }
-    return nullptr;
+    return -ENOSYS;
 }
 
 int vnode_t::write(const char* txt, size_t length){
+    if (flags & VFS_RO) return -EACCES;
+    
     if (ops.write != nullptr){
+        if (type != VFIFO && type != VCHR){
+            if (data != nullptr) free(data);
+            data = nullptr;
+            serialf("Cleared!\n");
+        }
         return ops.write(txt, length, this);
     }
-    return -EACCES;
+    return -ENOSYS;
 }
 
 int vnode_t::mkfile(const char* fn, bool dir){
-    if (ops.create_subdirectory != nullptr){
-        return ops.create_subdirectory(fn, dir, this);
+    if (dir){
+        if (ops.mkdir != nullptr){
+            return ops.mkdir(fn, this);
+        }
+    }else{
+        if (ops.creat != nullptr){
+            return ops.creat(fn, this);
+        }
     }
     return -EROFS;
 }
@@ -52,26 +93,24 @@ namespace vfs{
 
     int def_read_dir(vnode** out_list, size_t* out_count, vnode_t* this_node){
         int i = 0;
-        for (; i < this_node->num_of_children; i++){
-            out_list[i] = this_node->children[i];
+        vnode_t* node = this_node->children;
+        while(node != nullptr){
+            out_list[i] = node;
+            node = node->next;
+            i++;
         }
 
         *out_count = i;
         return 0;
     }
 
-    void* def_load(size_t* cnt, vnode_t*){
+    void* def_read(size_t* cnt, vnode_t*){
         *cnt = 0;
         return nullptr;
     }
 
     int def_write(const char* txt, size_t length, vnode* this_node){
         return -EACCES;
-    }
-
-    int def_create_subdirectory(const char* fn, bool dir, vnode* this_node){
-        vfs::mount_node((char*)fn, dir ? VDIR : VREG, this_node);
-        return 0;
     }
 
     void _create_start_node(){
@@ -81,7 +120,7 @@ namespace vfs{
         start_node->type = VNODE_TYPE::VDIR;
         strcpy(start_node->name, "/");
         start_node->ops.read_dir = def_read_dir;
-        start_node->ops.load = def_load;
+        start_node->ops.read = def_read;
     }
 
     vnode_t* get_root_node(){
@@ -145,7 +184,7 @@ namespace vfs{
         return true;
     }
 
-    vnode_t* mount_node(char* name, VNODE_TYPE type, vnode_t* parent){
+    vnode_t* mount_node(char* name, VNODE_TYPE type, vnode_t* parent, uint16_t inode, uint16_t fs_inode, uint16_t gid, uint16_t uid, uint32_t size){
         if (start_node == nullptr) _create_start_node();
         if (parent == nullptr) parent = start_node;
 
@@ -155,18 +194,6 @@ namespace vfs{
         vnode_t* node;
 
         switch(type){
-            case VNODE_TYPE::VREG:{
-                node = new vnode_t;
-                memset(node, 0, sizeof(vnode_t));
-                break;
-            }
-
-            case VNODE_TYPE::VDIR:{
-                node = new vnode_t;
-                memset(node, 0, sizeof(vnode_t));
-                break;
-            }
-
             case VNODE_TYPE::VBLK:{
                 vblk_t* blk = new vblk_t;
                 memset(blk, 0, sizeof(vblk_t));
@@ -174,22 +201,43 @@ namespace vfs{
                 break;
             }
 
-            case VNODE_TYPE::VCHR:{
+            default: {
                 node = new vnode_t;
                 memset(node, 0, sizeof(vnode_t));
                 break;
             }
         }
         
-        parent->children[parent->num_of_children] = node;
-        parent->num_of_children++;
+        if (parent->children == nullptr){
+            parent->children = node;
+            parent->child_cnt = 1;
+        }else{
+            vnode_t* tnode = parent->children;
+            
+            while(true){
+                if (tnode->next == nullptr){
+                    tnode->next = node;
+                    parent->child_cnt++;
+                    break;
+                }
+                tnode = tnode->next;
+            }
+        }
+
 
         node->parent = parent;
         node->type = type;
+        node->inode = inode;
+        node->fs_inode = fs_inode;
+        node->gid = gid;
+        node->uid = uid;
+        node->size = size;
+        node->next = nullptr;
+        node->data_read = true;
+        node->data_write = true;
 
         node->ops.read_dir = def_read_dir;
-        node->ops.load = def_load;
-        node->ops.create_subdirectory = def_create_subdirectory;
+        node->ops.read = def_read;
         node->ops.write = def_write;
         
         strcpy(node->name, name);
@@ -202,7 +250,6 @@ namespace vfs{
         size_t out_count;
 
         node->ops.read_dir(out_list, &out_count, node);
-        kprintf("LEN: %d\n", out_count);
         for (size_t i = 0; i < out_count; i++){
             kprintf("> %s\n", out_list[i]->name);
         }

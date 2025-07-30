@@ -104,7 +104,7 @@ namespace PS2KB{
                     is_esc = true;
                     break;
                 case KEY_DOWN::DELETE:
-                    ascii = '\b';
+                    ascii = '~';
                     is_esc = true;
                     break;
                 case KEY_DOWN::HOME:
@@ -131,6 +131,9 @@ namespace PS2KB{
             ascii = QWERTYKeyboard::Translate(scancode, (CapsLock || (LeftShiftDown || RightShiftDown)) && !(CapsLock && (LeftShiftDown || RightShiftDown)), NumberLock);
             
             switch (scancode){
+                case KEY_DOWN::TAB:
+                    ascii = '\t';
+                    break;
                 case KEY_DOWN::BACKSPACE:
                     ascii = '\b';
                     break;
@@ -203,6 +206,11 @@ namespace PS2KB{
             ascii = 'q'; // Ctrl + D escape code
             is_esc = true;
         }
+        if ((ascii == 'x' || ascii == 'X') && IS_CTRL_DOWN){
+            ascii = 'x'; // Ctrl + C escape code
+            is_esc = true;
+        }
+
         if (ascii == 0) return;
 
         if (tty::focused_tty != nullptr){

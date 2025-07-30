@@ -120,6 +120,9 @@ int get_available_fd(task_t* task){
 
 
 open_fd_t* task_t::open_node(vnode_t* node, int id){
+    if (node == nullptr) return nullptr;
+    node->open();
+    
     int desc_id = id;
     if (id < 0) desc_id = get_available_fd(this);
 
@@ -168,6 +171,7 @@ void task_t::close_fd(open_fd_t* fd){
     if (fd->previous) fd->previous->next = fd->next;
     if (fd->next) fd->next->previous = fd->previous;
 
+    fd->node->close();
     delete fd;
 }
 
@@ -186,6 +190,9 @@ open_fd_t* task_t::get_fd(uint64_t fd){
 
 
 void task_t::exit(int code){
+    task_scheduler::disable_scheduling = true;
+    // free any allocated memory + taskmgr internals.
+    
     this->exit_code = code;
     this->state = task_state_t::ZOMBIE;
     serialf("EXIT %d pid: %d\n\r", code, pid);
@@ -201,7 +208,8 @@ void task_t::exit(int code){
         task_t* task = task_list;
         while (task != nullptr){
             if (task->pid == ppid && task->block == WAITING_ON_CHILD && (task->block_info == -1 || task->block_info == pid)){
-                task_scheduler::unblock_task(task);
+                serialf("WAKING UP %d\n", task->pid);
+                task_scheduler::unblock(task);
             }
             task = task->next;
         }
@@ -216,6 +224,7 @@ void task_t::exit(int code){
 
 namespace task_scheduler{
     bool disable_scheduling = true;
+    task_t* next_task = nullptr;
 
     void idle(){
         while(1) {
@@ -224,7 +233,12 @@ namespace task_scheduler{
         }
     }
 
-    
+    void change_task(task_t* task){
+        next_task = task;
+        task_t* ctask = task_scheduler::get_current_task();
+        ctask->counter = 0;
+        asm ("int $0x23");
+    }
     uint64_t allocate_stack(){
         return (uint64_t)GlobalAllocator.RequestPages(TASK_SCHEDULER_DEFAULT_STACK_SIZE_IN_PAGES);
     }
@@ -478,7 +492,6 @@ namespace task_scheduler{
 
     task_t* clone(task_t* process, unsigned long flags, unsigned long stack, unsigned long tls, function entry){
         if (process == nullptr) return nullptr; // :)
-
         task_t* task = new task_t;
         memset(task, 0, sizeof(task_t));
 
@@ -505,6 +518,7 @@ namespace task_scheduler{
         task->kstack = allocate_stack();
         task->syscall_stack = allocate_stack();
         //task->stack = allocate_stack();
+        task->stack = stack - TASK_SCHEDULER_DEFAULT_STACK_SIZE;
         task->sig_stack = allocate_stack();
 
         task->brk = process->brk;
@@ -526,6 +540,7 @@ namespace task_scheduler{
         memcpy_simd((void*)task->kstack, (void*)process->kstack, TASK_SCHEDULER_DEFAULT_STACK_SIZE);
         memcpy_simd((void*)task->syscall_stack, (void*)process->syscall_stack, TASK_SCHEDULER_DEFAULT_STACK_SIZE);
 
+        serialf("CloneVM: %d\n", flags & CLONE_VM);
         if (flags & CLONE_VM){
             task->ptm = process->ptm;
         }else{
@@ -547,6 +562,7 @@ namespace task_scheduler{
         
         
         task->rsp = stack;
+        serialf("CloneFiles: %d\n", flags & CLONE_FILES);
 
         if (flags & CLONE_FILES){
             task->open_fds = process->open_fds;
@@ -631,6 +647,13 @@ namespace task_scheduler{
 
 
     task_t* find_next_task(){
+        if (next_task){
+            next_task->counter = TASK_SCHEDULER_COUNTER_DEFAULT;
+            task_t* t = next_task;
+            next_task = nullptr;
+            return t;
+        }
+        
         task_t* task = task_list;
         while(task != nullptr){
             if ((task->state != task_state_t::INTERRUPTED && task->state != task_state_t::DISABLED && task->state != task_state_t::BLOCKED && task->state != task_state_t::ZOMBIE) && task->counter > 0){
@@ -642,13 +665,49 @@ namespace task_scheduler{
         return nullptr;
     }
 
+    int schedule_until(uint64_t ticks, task_state_t state){
+        task_t* task = task_scheduler::get_current_task();
+        if (task == nullptr) return -ESRCH;
+
+        task->schedule_ticks = ticks;
+        task->schedule_prev_state = task->state;
+        task->schedule_until = true;
+        task->state = state;
+        task->counter = 0;
+        task->block = BLOCK_UNKNOWN;
+        asm ("sti");
+        asm ("int $0x23");
+        return 0;
+    }
+
+    int yield(){
+        task_t* task = task_scheduler::get_current_task();
+        if (task == nullptr) return -ESRCH;
+
+        task->state = BLOCKED;
+        task->block = YIELD;
+        task->counter = 0;
+        asm ("sti");
+        asm ("int $0x23");
+        return 0;
+    }
+
+    int unblock(task_t* task){
+        if (task == nullptr) return -ESRCH;
+        task->state = STOPPED;
+        return 0;
+    }
+
     void reset_counters(){
         task_t* task = task_list;
         while(task != nullptr){
+            if (task->schedule_until && task->schedule_ticks >= APICticsSinceBoot){
+                task->state = task->schedule_prev_state;
+            }
+
             if ((task->state != task_state_t::INTERRUPTED && task->state != task_state_t::DISABLED && task->state != task_state_t::BLOCKED && task->state != task_state_t::ZOMBIE)){
                 task->counter = TASK_SCHEDULER_COUNTER_DEFAULT;
             }
-
             task = task->next;
         }
     }
@@ -669,6 +728,7 @@ namespace task_scheduler{
     }
 
     void _exit_process(int pid, int code){
+        // rewrite this thing
         task_t* ctask = task_scheduler::get_current_task();
 
         task_t* task = task_list;
@@ -690,10 +750,10 @@ namespace task_scheduler{
     }
     void run_task(task_t* task);
     void _check_for_pending_signals(task_t* task){
-        if (task->pending_signals == 0) return;
+        uint64_t pending_signals = task->pending_signals | task->pending_signals_thread;
+        if (pending_signals == 0) return;
         if (task->executing_a_handler) return; // a handler is already executing... let it finish (it has interrupted some other thread)
         disable_scheduling = true;
-        uint64_t pending_signals = task->pending_signals;
         int signal = 0;
         while (pending_signals != 0){ // loop through all of the possible signals
             if ((pending_signals & 1) == 0) { pending_signals >>= 1; signal++; continue;}; // continue if signal is not pending

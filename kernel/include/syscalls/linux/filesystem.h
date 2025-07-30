@@ -3,6 +3,11 @@
 #define AT_FDCWD (-100)
 
 
+#define _IOC(a,b,c,d) ( ((a)<<30) | ((b)<<8) | (c) | ((d)<<16) )
+#define _IOC_NONE  0U
+#define _IOC_WRITE 1U
+#define _IOC_READ  2U
+
 #define _IO(a,b) _IOC(_IOC_NONE,(a),(b),0)
 #define _IOW(a,b,c) _IOC(_IOC_WRITE,(a),(b),sizeof(c))
 #define _IOR(a,b,c) _IOC(_IOC_READ,(a),(b),sizeof(c))
@@ -155,6 +160,8 @@
 #  define X_OK	1		/* Test for execute permission.  */
 #  define F_OK	0		/* Test for existence.  */
 
+int sys_pread64(int fd, char* buf, size_t count, size_t off);
+
 enum DIRENT_TYPE{
     DT_UNKNOWN = 0,
     DT_FIFO = 1,
@@ -191,3 +198,24 @@ struct linux_dirent64 {
     unsigned char  d_type;   /* File type */
     char           d_name[128]; /* Filename (null-terminated) */
 };
+
+#define FD_SETSIZE 1024
+
+typedef struct {
+    unsigned long fds_bits[FD_SETSIZE / (8 * sizeof(long))];
+} fd_set;
+
+typedef long int __fd_mask;
+#define __NFDBITS	(8 * (int) sizeof (__fd_mask))
+
+#define FD_ZERO(p) \
+    memset((p), 0, sizeof(fd_set))
+
+#define FD_SET(fd, p) \
+    ((p)->fds_bits[(fd) / __NFDBITS] |= (1UL << ((fd) % __NFDBITS)))
+
+#define FD_CLR(fd, p) \
+    ((p)->fds_bits[(fd) / __NFDBITS] &= ~(1UL << ((fd) % __NFDBITS)))
+
+#define FD_ISSET(fd, p) \
+    ((p)->fds_bits[(fd) / __NFDBITS] & (1UL << ((fd) % __NFDBITS)))

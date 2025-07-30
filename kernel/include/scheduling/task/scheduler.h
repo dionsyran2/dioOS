@@ -10,8 +10,8 @@
 
 
 
-#define TASK_SCHEDULER_COUNTER_DEFAULT              20              // The larger the quantum, the "laggier" the user experience - quanta above 100ms should be avoided.
-#define TASK_SCHEDULER_DEFAULT_STACK_SIZE           4 * 1024 * 1024 // 1MB
+#define TASK_SCHEDULER_COUNTER_DEFAULT              2              // The larger the quantum, the "laggier" the user experience - quanta above 100ms should be avoided.
+#define TASK_SCHEDULER_DEFAULT_STACK_SIZE           4 * 1024 * 1024 // 4MB
 #define TASK_SCHEDULER_DEFAULT_STACK_LOCATION       0xFFFF820000000000
 #define TASK_SCHEDULER_DEFAULT_KSTACK_LOCATION      0xFFFF830000000000
 
@@ -51,7 +51,9 @@ typedef enum {
 } task_state_t;
 
 enum block_type{
+    BLOCK_UNKNOWN = 0,
     WAITING_ON_CHILD = 1,
+    YIELD = 2
 };
 
 struct open_fd_t;
@@ -135,6 +137,10 @@ typedef struct task {
     bool is_signal_handler;
     bool executing_a_handler;
 
+    bool schedule_until;
+    uint64_t schedule_ticks;
+    task_state_t schedule_prev_state;
+
     bool started;
 
     open_fd_t* open_node(vnode_t* node, int start = -1);
@@ -197,6 +203,14 @@ namespace task_scheduler{
     void free_stack(void* pages);
 
     void init();
+
+    int schedule_until(uint64_t tick, task_state_t block);
+
+    int yield();
+
+    int unblock(task_t* task);
+
+    void change_task(task_t* task);
 }
 
 extern "C" void run_task_asm();

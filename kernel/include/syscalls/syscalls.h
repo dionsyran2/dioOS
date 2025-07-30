@@ -1,5 +1,10 @@
 #pragma once
-#define LOG_SYSCALLS
+//#define LOG_SYSCALLS	// this will log any syscall received to COM1...
+				   		// and halt if a syscall is not implemented printing its
+					   	// number and parameters to the screen
+						// Note: if you wanna test the sound system, its better if you disable this.
+						// Writing to the serial port is really slow and affects real time tasks really badly
+
 #include <stdint.h>
 #include <stddef.h>
 #include "termios.h"
@@ -31,6 +36,7 @@ void register_sig_syscalls();
 #define SYSCALL_SIGPROCMASK             14
 #define SYSCALL_SIGRETURN				15
 #define SYSCALL_IOCTL                   16
+#define SYSCALL_PREAD64				    17
 #define SYSCALL_READV					19
 #define SYSCALL_WRITEV                  20
 #define SYSCALL_ACCESS                  21
@@ -48,11 +54,15 @@ void register_sig_syscalls();
 #define SYSCALL_WAIT4                   61
 #define SYSCALL_KILL					62
 #define SYSCALL_UNAME                   63
-#define SYSCALL_FNCNTL					72
+#define SYSCALL_FCNTL					72
+#define SYSCALL_TRUNCATE				76
+#define SYSCALL_FTRUNCATE				77
 #define SYSCALL_GETCWD					79
 #define SYSCALL_CHDIR					80
 #define SYSCALL_FCHDIR					81
 #define SYSCALL_MKDIR					83
+#define SYSCALL_CREAT					85
+#define SYSCALL_GETTIMEOFDAY			96
 #define SYSCALL_GETRLIMIT				97
 #define SYSCALL_GETUID                  102
 #define SYSCALL_GETGID                  104
@@ -62,23 +72,32 @@ void register_sig_syscalls();
 #define SYSCALL_GETEGID                 108
 #define SYSCALL_SETPGID					109
 #define SYSCALL_GETPPID					110
+#define SYSCALL_GETPGRP					111
+#define SYSCALL_SETRESUID				117
+#define SYSCALL_GETRESUID				118
+#define SYSCALL_SETRESGID				119
+#define SYSCALL_GETRESGID				120
 #define SYSCALL_GETPGID					121
 #define SYSCALL_SIGALTSTACK				131
 #define SYSCALL_ARCH_PRCTL              158
 #define SYSCALL_GETTID                  186
 #define SYSCALL_TKILL					200
+#define SYSCALL_TIME					201
 #define SYSCALL_FUTEX					202
 #define SYSCALL_GETAFFINITY				204
 #define SYSCALL_GETDENTS64				217
 #define SYSCALL_SET_TID_ADDR            218
 #define SYSCALL_GETTIME                 228
 #define SYSCALL_EXIT_GROUP              231
+#define SYSCALL_TGKILL					234
 #define SYSCALL_OPENAT					257
 #define SYSCALL_MKDIRAT					258
 #define SYSCALL_NEWFSTATAT				262
 #define SYSCALL_FACCESSAT               269
 #define SYSCALL_PSELECT					270
+#define SYSCALL_PIPE2					293
 #define SYSCALL_PRLIMIT					302
+#define SYSCALL_GETRANDOM				318
 #define SYSCALL_FACCESSAT2				439
 
 
@@ -112,6 +131,21 @@ struct winsize {
 struct timespc{
     uint64_t tv_sec;
     uint32_t tv_nsec;
+};
+
+typedef long	__kernel_old_time_t;
+typedef long	__kernel_time_t;
+typedef long	__kernel_suseconds_t;
+
+struct timezone
+{
+	int tz_minuteswest;		/* Minutes west of GMT.  */
+	int tz_dsttime;		/* Nonzero if DST is ever in effect.  */
+};
+
+struct timeval {
+	__kernel_old_time_t	tv_sec;		/* seconds */
+	__kernel_suseconds_t	tv_usec;	/* microseconds */
 };
 
 struct pollfd {

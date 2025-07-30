@@ -1,7 +1,7 @@
 #include <pipe.h>
 
 int WritePipe(vnode_t* pipe, const char* data, size_t length){
-    pipe_data* p = (pipe_data*)pipe->fs_data;
+    pipe_data* p = (pipe_data*)pipe->misc_data[0];
     spin_lock(&p->lock);
 
     if (p->buffer_size < (length + p->offset_in_buffer)){
@@ -16,14 +16,14 @@ int WritePipe(vnode_t* pipe, const char* data, size_t length){
     }
     memcpy(&p->data[p->offset_in_buffer], data, length);
     p->offset_in_buffer += length;
-    pipe->data_available = true;
+    pipe->data_read = true;
     spin_unlock(&p->lock);
     return length;
 }
 
 char* ReadPipe(vnode_t* pipe, size_t* length){
-    while (!pipe->data_available) __asm__("pause");
-    pipe_data* p = (pipe_data*)pipe->fs_data;
+    while (!pipe->data_read) __asm__("pause");
+    pipe_data* p = (pipe_data*)pipe->misc_data[0];
     spin_lock(&p->lock);
 
     size_t bsz = p->offset_in_buffer;
@@ -33,7 +33,7 @@ char* ReadPipe(vnode_t* pipe, size_t* length){
     p->offset_in_buffer = 0;
     *length = bsz;
 
-    pipe->data_available = false;
+    pipe->data_read = false;
 
     spin_unlock(&p->lock);
     return out;
@@ -48,7 +48,7 @@ int default_pipe_write(const char* data, size_t length, vnode_t* this_node){
 }
 
 int delete_pipe_data(vnode_t* pipe, size_t length){
-    pipe_data* p = (pipe_data*)pipe->fs_data;
+    pipe_data* p = (pipe_data*)pipe->misc_data[0];
     spin_lock(&p->lock);
 
     if (length > p->offset_in_buffer) {
@@ -56,7 +56,7 @@ int delete_pipe_data(vnode_t* pipe, size_t length){
     }else{
         p->offset_in_buffer -= length;
     }
-    if (p->offset_in_buffer == 0) pipe->data_available = false;
+    if (p->offset_in_buffer == 0) pipe->data_read = false;
 
     spin_unlock(&p->lock);
 
@@ -65,17 +65,14 @@ int delete_pipe_data(vnode_t* pipe, size_t length){
 vnode_t* CreatePipe(const char* name, vnode_t* parent){
     vnode_t* node = new vnode_t;
     
-    node->type = VNODE_TYPE::VPIPE;
-    node->fs_data = malloc(sizeof(pipe_data));
-    node->ops.load = default_pipe_load;
+    node->type = VNODE_TYPE::VFIFO;
+    node->misc_data[0] = malloc(sizeof(pipe_data));
+    node->ops.read = default_pipe_load;
     node->ops.write = default_pipe_write;
     node->parent = parent;
 
-    if (parent){
-        parent->children[parent->num_of_children] = node;
-        parent->num_of_children++;
-    }
-    memset(node->fs_data, 0, sizeof(pipe_data));
+    
+    memset(node->misc_data[0], 0, sizeof(pipe_data));
 
     strcpy(node->name, (char*)name);
 
@@ -83,7 +80,7 @@ vnode_t* CreatePipe(const char* name, vnode_t* parent){
 }
 
 void ClosePipe(vnode_t* pipe){
-    pipe_data* data = (pipe_data*)pipe->fs_data;
+    pipe_data* data = (pipe_data*)pipe->misc_data[0];
     if (data->data != nullptr) free(data->data);
     free(data);
     delete pipe; 

@@ -13,6 +13,7 @@ applications/bin
 applications/lib
 kernel/bin
 kernel/lib
+glibc
 mnt
 
 # Logs

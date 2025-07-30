@@ -14,6 +14,7 @@ namespace RTC
 {
     struct rtc_time_t
     {
+        uint32_t msec;
         uint8_t second;
         uint8_t minute;
         uint8_t hour;

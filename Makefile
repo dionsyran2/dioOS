@@ -8,7 +8,7 @@ BUILDDIR := $(KERNELDIR)/bin
 DISKDIR := $(OSDIR)/disk
 APPDIR := $(OSDIR)/applications
 APPBINDIR := $(APPDIR)/bin
-DISK_SIZE_MB=512
+DISK_SIZE_MB=2048
 ESP_SIZE_MB=64
 
 GRUB_VERSION := 2.06
@@ -18,6 +18,9 @@ GRUB_DIR := grub-$(GRUB_VERSION)
 
 .SILENT: all
 all:
+	@echo "Compiling applications"
+	$(MAKE) -C $(APPDIR)
+	
 	@echo "Compiling the kernel"
 	$(MAKE) -C $(KERNELDIR)
 	$(MAKE) buildimg

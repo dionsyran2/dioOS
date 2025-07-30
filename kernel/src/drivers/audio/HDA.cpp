@@ -1,18 +1,22 @@
 #include <drivers/audio/HDA.h>
 #include <paging/PageFrameAllocator.h>
 #include <scheduling/apic/apic.h>
-void *TestSong = nullptr;
-uint8_t numOfHDAInstances = 0;
-HDA *hdaInstances[10];
+#include <cstr.h>
+#include <syscalls/syscalls.h>
 
-uint64_t *CORB;
-uint64_t *RIRB;
-uint8_t NumOfCodecs = 0;
-uint8_t DAC[20];
-uint8_t numOfDACs = 0;
-uint8_t PINS[20];
-uint8_t numOfpins = 0;
-PCI::PCIHeader0 *hdr;
+/*
+* If you are reading this, you are making a big mistake... leave while you can!
+* I warned you!
+* If I knew what I was doing before writing this it would be much much cleaner and readable
+*/
+
+
+
+#define FRAMES_PER_BD     64
+#define BD_COUNT          64
+#define INTERRUPT_FREQ    8
+
+
 void HDA::Reset()
 { // Perform a cold reset
     volatile uint32_t *control = (volatile uint32_t *)(bar0 + 0x08);
@@ -58,12 +62,12 @@ void HDA::ResetCORB()
     uint8_t entries16 = (*size >> 4) & 0b0010;
     uint8_t entries256 = (*size >> 4) & 0b0100;
 
-    //globalRenderer->printf("[HDA DRIVER] CORB SUPPORTED SIZE: [256]: 0x%hh| [16]: 0x%hh | [2]:0x%hh | [RAW]: 0x%hh\n", entries256, entries16, entries2, *size & 0xFF);
+    //kprintf("[HDA DRIVER] CORB SUPPORTED SIZE: [256]: 0x%hh| [16]: 0x%hh | [2]:0x%hh | [RAW]: 0x%hh\n", entries256, entries16, entries2, *size & 0xFF);
 
     if (entries256 == 1 && (entries16 == 1 || entries2 == 1))
     { // We need to check if there is at least one more supported. If only one is then the register is read only
 
-       //globalRenderer->printf("[HDA DRIVER] Setting CORB Size to 0b10 (256 Entries)\n");
+       //kprintf("[HDA DRIVER] Setting CORB Size to 0b10 (256 Entries)\n");
 
         *size &= ~0b11;
         *size |= 0b10;
@@ -71,7 +75,7 @@ void HDA::ResetCORB()
     else if (entries16 == 1 && entries2 == 1)
     { // We need to check if there is at least one more supported. If only one is then the register is read only
 
-       //globalRenderer->printf("[HDA DRIVER] Setting CORB Size to 0b01 (16 Entries)\n");
+       //kprintf("[HDA DRIVER] Setting CORB Size to 0b01 (16 Entries)\n");
 
         *size &= ~0b11;
         *size |= 0b01;
@@ -89,7 +93,7 @@ void HDA::ResetCORB()
     {
         *memHigh = (uint32_t)((mem >> 32)); // Set the high part of the memory address
     }
-    //globalRenderer->printf("[HDA DRIVER] CORB Low: [%x]/[%x] | CORB High: [%x]/[%x]\n", (uint32_t)(mem), *memLow, (uint32_t)((mem >> 32)), *memHigh);
+    //kprintf("[HDA DRIVER] CORB Low: [%x]/[%x] | CORB High: [%x]/[%x]\n", (uint32_t)(mem), *memLow, (uint32_t)((mem >> 32)), *memHigh);
 
     uint16_t *CORBRP = (uint16_t *)(bar0 + 0x4A);
     *CORBRP |= (1 << 15);
@@ -116,16 +120,16 @@ void HDA::ResetRIRB()
     uint8_t entries2 = (*size >> 4) & 0b0001;
     uint8_t entries16 = (*size >> 4) & 0b0010;
     uint8_t entries256 = (*size >> 4) & 0b0100;
-    //globalRenderer->printf("[HDA DRIVER] RIRB SUPPORTED SIZE: [256]: 0x%hh| [16]: 0x%hh | [2]: 0x%hh | [RAW]: 0x%hh\n", entries256, entries16, entries2, *size);
+    //kprintf("[HDA DRIVER] RIRB SUPPORTED SIZE: [256]: 0x%hh| [16]: 0x%hh | [2]: 0x%hh | [RAW]: 0x%hh\n", entries256, entries16, entries2, *size);
     if (entries256 == 1 && (entries16 == 1 || entries2 == 1))
     { // We need to check if there is at least one more supported. If only one is then the register is read only
-       //globalRenderer->printf("[HDA DRIVER] Setting RIRB Size to 0b10 (256 Entries)\n");
+       //kprintf("[HDA DRIVER] Setting RIRB Size to 0b10 (256 Entries)\n");
         *size &= ~0b11;
         *size |= 0b10;
     }
     else if (entries16 == 1 && entries2 == 1)
     { // We need to check if there is at least one more supported. If only one is then the register is read only
-       //globalRenderer->printf("[HDA DRIVER] Setting RIRB Size to 0b01 (16 Entries)\n");
+       //kprintf("[HDA DRIVER] Setting RIRB Size to 0b01 (16 Entries)\n");
         *size &= ~0b11;
         *size |= 0b01;
     } // If none of those are true, then there is only one size supported, the register is Read Only and the value is set to 0 (2 entries)
@@ -134,7 +138,7 @@ void HDA::ResetRIRB()
     memset((void *)mem, 0, 0x2000);
     if ((mem & 0xFF) != 0)
     {
-       //globalRenderer->printf("[HDA DRIVER] ERROR: CORB buffer is not 256-byte aligned!\n");
+       //kprintf("[HDA DRIVER] ERROR: CORB buffer is not 256-byte aligned!\n");
     }
     volatile uint32_t *memLow = (volatile uint32_t *)(bar0 + 0x50);
     volatile uint32_t *memHigh = (volatile uint32_t *)(bar0 + 0x54);
@@ -263,7 +267,7 @@ connList *HDA::GetConnectedNodes(int codec, int widget)
             i++;
             entries += 2;
         }
-        // globalRenderer->printf(0xffde21, "[HDA DRIVER] (%d) CONNECTION [%d]: %d\n", widget, lf ? i - 3 : i - 1, connections[lf ? i - 3 : i - 1]);
+        // kprintf(0xffde21, "[HDA DRIVER] (%d) CONNECTION [%d]: %d\n", widget, lf ? i - 3 : i - 1, connections[lf ? i - 3 : i - 1]);
     }
 
     connList *list = new connList;
@@ -417,7 +421,11 @@ void HDA::EnumerateFunctionGroups(int codec)
             uint32_t audio_mixer_amp_capabilities = SRCMD(codec, function, 0xF00, 0x12);
             hda_set_node_gain(codec, function, 0x1, audio_mixer_amp_capabilities, 100);
             hda_set_node_gain(codec, function, 0x2, audio_mixer_amp_capabilities, 100);
-            // globalRenderer->printf(0xFF0000, "[HDA DRIVER] AFG Function Group Located at %hh\n", function);
+            // kprintf(0xFF0000, "[HDA DRIVER] AFG Function Group Located at %hh\n", function);
+
+            uint32_t cap = SRCMD(codec, function, GetParameters, SupportedPCMRates);
+            hda_output_amp_node_rates = cap; // default rates/sizes
+
             EnumerateWidgets(codec, function);
         }
     }
@@ -431,7 +439,7 @@ void HDA::EnumerateCodecs()
         uint64_t res = SRCMD(codec, 0, GetParameters, VendorIDP); // NID = 0 (ROOT NODE)
         if (res != 0)
         {
-           //globalRenderer->printf("[HDA DRIVER] CODEC LOCATED (%d)[%x]\n", codec, res);
+           //kprintf("[HDA DRIVER] CODEC LOCATED (%d)[%x]\n", codec, res);
             EnumerateFunctionGroups(codec);
             break;
         }
@@ -594,61 +602,20 @@ uint16_t HDA::GetFormat(uint32_t frequency, uint32_t bps, uint32_t channels){
     payload |= (channels - 1);
     return payload;
 }
-uint8_t *BDL;
-uint8_t *buff;
-uint64_t offset = 0;
-size_t sizeOfBuffer = 0;
 
-uint16_t nextchunk = 0;
+void hda_tsk(HDA* h);
+void HDA::Prepare(){
+    if (hda_task != nullptr) task_scheduler::remove_task(hda_task);
 
-int HDA::RefillBuffer()
-{
-    uint8_t *Stream = (uint8_t *)(bar0 + 0x80 + (0x20 * InStreams));
-    if (offset > sizeOfBuffer) {
-        globalRenderer->printf("OFF: %d SZ: %d\n", offset, sizeOfBuffer);
+    hda_task = task_scheduler::create_process("HDA Driver", (function)hda_tsk);
+    hda_task->rdi = (uint64_t)this;
+    task_scheduler::mark_ready(hda_task);
 
-        *Stream &= ~0b10; // Stop the stream
-        return -1;
-    }
-
-    if ((*Stream & 0b10) != 0b10){
-       //globalRenderer->printf("Stream not running\n");
-        while(1);
-    }
-
-    for (int i = nextchunk; i < nextchunk + 32; i++)
-    {
-        BufferDescriptor *bd = (BufferDescriptor *)((uint8_t *)BDL + (i * 0x10));
-        bd->IOC = ((i + 1) % 32 == 0) ? 1 : 0;
-        if (offset > sizeOfBuffer) {
-            memset((void*)bd->address, 0, 128);
-            continue;
-        }
-        memcpy_simd((void *)bd->address, (void *)((uint64_t)buff + offset), 128);
-        offset += 128;
-    }
-    asm("wbinvd");
-    nextchunk += 32;
-    if (nextchunk >= 255)
-    {
-        nextchunk = 0;
-    }
-    *(Stream + 0x03) |= 1 << 2;
-    while ((*(Stream + 0x03) & (1 << 2)))
-
-    asm volatile("mfence" ::: "memory"); // Ensure memory writes are completed
-    return 1;
-}
-
-
-
-void HDA::Play(uint8_t *data, size_t sz, uint32_t frequency, uint32_t bps, uint32_t channels)
-{
-
-    buff = data;
-    sizeOfBuffer = sz;
-    offset = 0;
-    //*((uint32_t *)(bar0 + 0x20)) |= (1 << 31) | 0b11111111;
+    running = false;
+    // to-do clear buffers
+    
+    // reset the stream and prepare the dac
+    asm ("sti");
     uint8_t *Stream = (uint8_t *)(bar0 + 0x80 + (0x20 * InStreams));
     *Stream &= ~0b10; // Stop the stream
     *Stream |= 1;     // Reset the stream
@@ -656,62 +623,121 @@ void HDA::Play(uint8_t *data, size_t sz, uint32_t frequency, uint32_t bps, uint3
     *Stream &= ~1;
     while (*Stream & 0b1);
     while (*Stream & 0b10);
-   //globalRenderer->printf("Stream Reset!\n");
-    void *bdbuff = GlobalAllocator.RequestPages((uint16_t)(((1024 * 128) / 0x1000) + 1));
-    for (int i = 0; i < 256; i++)
-    {
-        BufferDescriptor *bd = (BufferDescriptor *)((uint8_t *)BDL + (i * 0x10));
-        bd->address = (uint64_t)bdbuff + offset;
-        if (bd->address & 0x7F) {
-           //globalRenderer->printf("Not aligned to 128 bytes!\n");
-        }
-        memset(bdbuff, 0, (((128 * 256) / 0x1000) + 1) * 0x1000);
-        memcpy((void *)((uint64_t)bd->address), (void *)((uint64_t)data + offset), 128);
-        bd->size = 128;
-        bd->IOC = ((i + 1) % 32 == 0) ? 1 : 0;
-        offset += 128;
-    }
-
-    asm("wbinvd");
 
 
-    *(uint32_t *)(Stream + 0x18) = (uint32_t)(uint64_t)BDL;
-    *(uint32_t *)(Stream + 0x1C) = (uint32_t)((uint64_t)BDL >> 32);
-
-    *(uint32_t *)(Stream + 0x08) = 128 * 256;
-    *(uint16_t *)(Stream + 0x0C) = 255;
-
-    uint16_t StreamFormat = GetFormat(frequency, bps, channels);
-    *(uint16_t *)(Stream + 0x12) = StreamFormat;
+    *(uint16_t *)(Stream + 0x12) = selected_format;
 
     *(Stream + 0x02) &= 0b00001111;
     *(Stream + 0x02) |= 4 << 4;
     *(Stream + 0x03) = 0x1C;
 
-    SRCMD16(0, hda_output_amp_node_number, 0x2, StreamFormat);
+    if (Buffer != nullptr) free(Buffer);
+    Buffer = new uint64_t[4096];
+    memset(Buffer, 0, 4096 * sizeof(uint64_t));
+    BufferSz = 4096;
+    BufferRP = 0;
+    BufferWP = 0;
+
+    SRCMD16(0, hda_output_amp_node_number, 0x2, selected_format);
     SRCMD(0, hda_output_amp_node_number, 0x706, 0x40);
 
-    Sleep(100);
+    bd_list = (BufferDescriptor*)GlobalAllocator.RequestPage();
+    memset(bd_list, 0, 0x1000);
 
-    *Stream |= 1 << 2;
-    *Stream |= 0b10;
-    while ((*Stream & 0b10) != 0b10);
-
-   //globalRenderer->printf("DAC CTRL: %x, DAC FORMAT: %x, PIN CONTROL: %x\n", SRCMD(0, hda_output_amp_node_number, 0xF06, 0), SRCMD(0, hda_output_amp_node_number, 0xA00, 0), SRCMD(0, 33, 0xF07, 0));
-
-    while (true)
-    {
-        if ((*(Stream + 0x03) & 0xF) != 0)
-        {
-            if(RefillBuffer() == -1){
-                break;
-            } 
+    *(uint32_t *)(Stream + 0x18) = (uint32_t)(uint64_t)bd_list;
+    *(uint32_t *)(Stream + 0x1C) = (uint32_t)((uint64_t)bd_list >> 32);
+    *(uint32_t *)(Stream + 0x08) = FRAMES_PER_BD * BD_COUNT * selected_frame_size;
+    *(uint16_t *)(Stream + 0x0C) = BD_COUNT - 1;
+    //kprintf("DAC CTRL: %x, DAC FORMAT: %x, PIN CONTROL: %x\n", SRCMD(0, hda_output_amp_node_number, 0xF06, 0), SRCMD(0, hda_output_amp_node_number, 0xA00, 0), SRCMD(0, 33, 0xF07, 0));
+    for (int i = 0; i < BufferSz; i++){
+        if (Buffer[i] != NULL){
+            free((void*)Buffer[i]);
         }
-    };
+        Buffer[i] = (uint64_t)malloc(FRAMES_PER_BD * selected_frame_size);
+    }
+    refill_needeed = true;
+}
 
-   //globalRenderer->printf(0x0FF000, "CAP: %hh\n", *(Stream + 0x03));
+void HDA::QueueSample(void* sample){
+    memcpy_simd((void*)Buffer[BufferWP], sample, selected_frame_size * FRAMES_PER_BD);
+    BufferWP++;
+    if (BufferWP >= BufferSz) BufferWP = 0;
+}
 
-   //globalRenderer->printf(0xFF0000, "STREAM CONFIGURATION: \n  Stream Format: %h | Stream Control 2: %hh", *(uint16_t *)(Stream + 0x12), *(Stream + 0x02));
+uint32_t HDA::PlaySample(uint8_t* samples, size_t sample_cnt){
+    sample_cnt = DIV_ROUND_UP(sample_cnt, FRAMES_PER_BD);
+
+    size_t written_samples = 0;
+    while(refill_needeed == false);
+
+    for (int i = 0; i < sample_cnt; i++){
+        uint8_t* sample = samples + (i * selected_frame_size * FRAMES_PER_BD);
+        QueueSample(sample);
+        written_samples += FRAMES_PER_BD;
+    }
+
+    if (running == false){
+        if (BufferWP < BD_COUNT) return written_samples;
+        running = true;
+        // Prefill
+        uint8_t *Stream = (uint8_t *)(bar0 + 0x80 + (0x20 * InStreams));
+        uint64_t dma_buffer = (uint64_t)GlobalAllocator.RequestPages(DIV_ROUND_UP(FRAMES_PER_BD * BD_COUNT * selected_frame_size, 0x1000));
+        for (int i = 0; i < BD_COUNT; i++){
+            bd_list[i].address = dma_buffer;
+            bd_list[i].size = FRAMES_PER_BD * selected_frame_size;
+            dma_buffer += bd_list[i].size;
+            bd_list[i].IOC = ((i + 1) % INTERRUPT_FREQ) == 0 ? 1 : 0;
+            memcpy_simd((void*)bd_list[i].address, (void*)Buffer[BufferRP], bd_list[i].size);
+            BufferRP++;
+        }
+        next_bd_refill = 0;
+        asm("wbinvd");
+        Sleep(100);
+        //Start
+        *Stream |= (1 << 2);
+        *Stream |= (1 << 1);
+        while((*Stream & 0b10) == 0);
+        task_scheduler::unblock(hda_task);
+    }else{
+        refill_needeed = false;
+        task_scheduler::change_task(hda_task);
+    }
+    return written_samples;
+}
+
+
+void hda_tsk(HDA* h){
+    HDA* hda = h;
+    uint8_t *Stream = (uint8_t *)(hda->bar0 + 0x80 + (0x20 * hda->InStreams));
+
+    while(true){
+        if (hda->BufferRP >= hda->BufferSz) hda->BufferRP = 0;
+        
+        if (hda->running == false){ // Stream is stopped
+            task_scheduler::yield();
+        }
+
+        if (hda->BufferWP == (hda->BufferRP + INTERRUPT_FREQ) || hda->BufferWP == hda->BufferRP) hda->refill_needeed = true; // keep it filled for the next iteration
+        while((*(Stream + 0x03) & 0xF) == 0){
+            hda->hda_task->counter = 0;
+            __asm__ __volatile__ ("int $0x23");
+        }
+
+        hda->hda_task->counter = 10;
+        int last_bd = hda->next_bd_refill + INTERRUPT_FREQ;
+        for (int i = hda->next_bd_refill; i < last_bd; i++){
+            while (hda->BufferWP == hda->BufferRP) hda->refill_needeed = true;
+            memcpy_simd((void*)hda->bd_list[i].address, (void*)hda->Buffer[hda->BufferRP], hda->bd_list[i].size);
+            hda->bd_list[i].IOC = ((i + 1) % INTERRUPT_FREQ) == 0 ? 1 : 0;
+            hda->BufferRP++;
+            hda->next_bd_refill++;
+        }
+        if (hda->next_bd_refill > (BD_COUNT - 1)) hda->next_bd_refill = 0;
+        asm("wbinvd");
+        asm volatile("mfence" ::: "memory");
+
+        *(Stream + 0x03) |= *(Stream + 0x03);
+    }
 }
 
 uint32_t HDA::GetNodeType(int codec, int node)
@@ -746,7 +772,7 @@ void HDA::hda_set_node_gain(uint8_t codec, uint8_t node, uint8_t node_type, uint
 
 void HDA::InitializeDAC(uint8_t codec, uint8_t node)
 {
-   globalRenderer->printf("Initializing DAC %d\n", node);
+   kprintf("Initializing DAC %d\n", node);
 
     // turn on power for Audio Output
     SRCMD(codec, node, 0x705, 0x00);
@@ -766,19 +792,21 @@ void HDA::InitializeDAC(uint8_t codec, uint8_t node)
         //we will control volume by Audio Output node
         hda_output_amp_node_number = node;
         hda_output_amp_node_capabilities = audio_output_amp_capabilities;
+        uint32_t cap = SRCMD(codec, node, GetParameters, SupportedPCMRates);
+        if (cap != 0) hda_output_amp_node_rates = cap;
     }
 
      //because we are at end of node path, log all gathered info
-    globalRenderer->printf("Sample Capabilites: %x\n", hda_audio_output_node_sample_capabilities);
-    globalRenderer->printf("Stream Format Capabilites: %x\n", hda_audio_output_node_stream_format_capabilities);
-    globalRenderer->printf("Volume node: %hh\n", hda_output_amp_node_number);
-    globalRenderer->printf("Volume capabilities: %x\n", hda_output_amp_node_capabilities);
+    kprintf("Sample Capabilites: %x\n", hda_audio_output_node_sample_capabilities);
+    kprintf("Stream Format Capabilites: %x\n", hda_audio_output_node_stream_format_capabilities);
+    kprintf("Volume node: %hh\n", hda_output_amp_node_number);
+    kprintf("Volume capabilities: %x\n", hda_output_amp_node_capabilities);
 
 }
 
 void HDA::InitializeAudioSelector(uint8_t codec, uint8_t node)
 {
-    globalRenderer->printf("Initializing Selector %d\n", node);
+    kprintf("Initializing Selector %d\n", node);
 
     // turn on power for Audio Selector
     SRCMD(codec, node, 0x705, 0x00);
@@ -815,7 +843,7 @@ void HDA::InitializeAudioSelector(uint8_t codec, uint8_t node)
 
 void HDA::InitializeMixer(uint8_t codec, uint8_t node)
 {
-    globalRenderer->printf("Initializing Mixer %d\n", node);
+    kprintf("Initializing Mixer %d\n", node);
 
     // turn on power for Audio Mixer
     SRCMD(codec, node, 0x705, 0x00);
@@ -856,7 +884,7 @@ void HDA::InitializeOutPin(uint8_t codec, uint8_t node)
     hda_output_amp_node_capabilities = 0;
 
 
-    globalRenderer->printf("Initializing PIN %d\n", node);
+    kprintf("Initializing PIN %d\n", node);
     // turn on power for PIN
     SRCMD(codec, node, 0x705, 0x00);
 
@@ -902,31 +930,34 @@ void HDA::InitializeOutPin(uint8_t codec, uint8_t node)
         InitializeAudioSelector(codec, first_connected_node_number);
     }
 }
+int snd_dev = -1;
+
 HDA::HDA(PCI::PCIDeviceHeader *pciHdr)
 {
-    hdaInstances[numOfHDAInstances] = this;
-    numOfHDAInstances++;
+    snd_dev++;
+    card_num = snd_dev;
 
     pciHdr->Command |= 1 << 1 | 1 << 2;
-   //globalRenderer->printf("cmd:: %x\n", pciHdr->Command);
+   //kprintf("cmd:: %x\n", pciHdr->Command);
     PCI::PCIHeader0 *hdr0 = (PCI::PCIHeader0 *)pciHdr;
     hdr = hdr0;
     bar0 = (hdr->BAR0 & 0xFFFFFFF0);
-    globalPTM.MapMemory((void*)bar0, (void*)bar0);
     if ((hdr->BAR0 & 0b110) == 0b100){
-       //globalRenderer->printf("64-bit address\n");
+       //kprintf("64-bit address\n");
         bar0 += ((uint64_t)hdr->BAR1) << 32;
     }
+
     globalPTM.MapMemory((void*)bar0, (void*)bar0);
-   //globalRenderer->printf("bar0: %x bar1: %x\n", hdr->BAR0, hdr->BAR1);
-   //globalRenderer->printf("%llx\n", (uint64_t)bar0);
-   //globalRenderer->printf("4-byte read at the ba: 0x%x\n", *(uint32_t*)bar0);
+    globalPTM.SetPageFlag((void*)bar0, PT_Flag::CacheDisabled, true);
+   //kprintf("bar0: %x bar1: %x\n", hdr->BAR0, hdr->BAR1);
+   //kprintf("%llx\n", (uint64_t)bar0);
+   //kprintf("4-byte read at the ba: 0x%x\n", *(uint32_t*)bar0);
     uint32_t Cap = *(uint32_t*)bar0;
     OutStreams = (Cap >> 8) & 0xF;
     InStreams = (Cap >> 12) & 0xF;
     BiStreams = (Cap >> 3) & 0b11111;
-   //globalRenderer->printf("64 Bit Addressing Support: %hh | OUT: %hh | IN: %hh | BI: %hh\n", Cap & 0x1, OutStreams, InStreams, BiStreams);
-   //globalRenderer->printf("Spec version %d.%d\n", *(uint8_t*)(bar0 + 0x3), *(uint8_t*)(bar0 + 0x2));
+   //kprintf("64 Bit Addressing Support: %hh | OUT: %hh | IN: %hh | BI: %hh\n", Cap & 0x1, OutStreams, InStreams, BiStreams);
+   //kprintf("Spec version %d.%d\n", *(uint8_t*)(bar0 + 0x3), *(uint8_t*)(bar0 + 0x2));
     // SET IRQ ETC...
 
     Reset();
@@ -936,21 +967,21 @@ HDA::HDA(PCI::PCIDeviceHeader *pciHdr)
     ResetCORB();
     ResetRIRB();
     EnumerateCodecs();
-    BDL = (uint8_t *)GlobalAllocator.RequestPages((uint16_t)10);
+    //BDL = (uint8_t *)GlobalAllocator.RequestPages((uint16_t)10);
 
-
+    bool has_output = true;
     if (pin_speaker_default_node_number != 0)
     {
         // initalize speaker
         if (pin_speaker_node_number != 0)
         {
-            globalRenderer->printf("Init speaker\n");
+            kprintf("Init speaker\n");
             InitializeOutPin(0, pin_speaker_node_number); // initalize speaker with connected output device
             hda_pin_output_node_number = pin_speaker_node_number;                 // save speaker node number
         }
         else
         {
-            globalRenderer->printf("Default speaker output\n");
+            kprintf("Default speaker output\n");
             InitializeOutPin(0, pin_speaker_default_node_number); // initalize default speaker
             hda_pin_output_node_number = pin_speaker_default_node_number;                 // save speaker node number
         }
@@ -965,7 +996,7 @@ HDA::HDA(PCI::PCIDeviceHeader *pciHdr)
         // if codec has also headphone output, initalize it
         if (pin_headphone_node_number != 0)
         {
-            globalRenderer->printf("Headphone output\n");
+            kprintf("Headphone output\n");
             InitializeOutPin(0, pin_headphone_node_number); // initalize headphone output
             hda_pin_headphone_node_number = pin_headphone_node_number;              // save headphone node number
 
@@ -983,7 +1014,7 @@ HDA::HDA(PCI::PCIDeviceHeader *pciHdr)
             if (GetPinSense(0, hda_pin_headphone_node_number))
             {
                 //hda_disable_pin_output(hda_codec_number, hda_pin_output_node_number);
-                globalRenderer->printf(0xFF0000, "Disabling pin %d\n", hda_pin_output_node_number);
+                kprintf(0xFF0000, "Disabling pin %d\n", hda_pin_output_node_number);
                 SRCMD(0, hda_pin_output_node_number, 0x707, (SRCMD(0, hda_pin_output_node_number, 0xF07, 0x00) & ~0x40));
                 hda_selected_output_node = hda_pin_headphone_node_number;
             }
@@ -998,22 +1029,423 @@ HDA::HDA(PCI::PCIDeviceHeader *pciHdr)
     }
     else if (pin_headphone_node_number != 0)
     { // codec do not have speaker, but only headphone output
-        globalRenderer->printf("Headphone output\n");
+        kprintf("Headphone output\n");
         //hda_is_initalized_useful_output = STATUS_TRUE;
         InitializeOutPin(0, pin_headphone_node_number); // initalize headphone output
         hda_pin_output_node_number = pin_headphone_node_number;                 // save headphone node number
     }
     else if (pin_alternative_output_node_number != 0)
     { // codec have only alternative output
-        globalRenderer->printf("Alternative output\n");
+        kprintf("Alternative output\n");
         //hda_is_initalized_useful_output = STATUS_FALSE;
         InitializeOutPin(0, pin_alternative_output_node_number); // initalize alternative output
         hda_pin_output_node_number = pin_alternative_output_node_number;                 // save alternative output node number
     }
     else
     {
-        globalRenderer->printf("codec does not have any output PINs\n");
+        has_output = false;
+        kprintf("codec does not have any output PINs\n");
     }
 
-    globalRenderer->printf("[HDA DRIVER] Initialization Completed successfully!\n");
+    if (has_output){
+        RegisterControl();
+        RegisterOutput();
+    }
+
+    
+
+    kprintf("Supported rates: %x\n", hda_output_amp_node_rates);
+    kprintf("Lowest supported rate: %d\n", LowestSupportedRate());
+    kprintf("Highest supported rate: %d\n", HighestSupportedRate());
+    kprintf("Lowest supported sample size: %d\n", LowestSupportedSampleSize());
+    kprintf("Highest supported sample size: %d\n", HighestSupportedSampleSize());
+    kprintf("[HDA DRIVER] Initialization Completed successfully!\n");
+}
+
+
+int hda_ioctl(int op, char* argp, vnode_t* node){
+    HDA* hda = (HDA*)node->misc_data[0];
+    uint64_t* arg = (uint64_t*)argp;
+
+    switch ((unsigned int)op){
+        case SNDRV_HWDEP_IOCTL_PVERSION: {
+            *arg = SNDRV_HWDEP_VERSION;
+            break; 
+        }
+
+        case SNDRV_HWDEP_IOCTL_INFO: {
+            struct snd_hwdep_info info;
+            
+            memset(&info, 0, sizeof(info));
+            info.card = hda->card_num;
+            strcpy((char*)info.name, "NAME");
+            strcpy((char*)info.id, "ID");
+            info.iface = 0;
+            memcpy_simd(arg, &info, sizeof(info));
+            break;
+        }
+        case SNDRV_CTL_IOCTL_CARD_INFO: {
+            struct snd_ctl_card_info info;
+            info.card = hda->card_num;
+            strcpy((char*)info.driver, "dioOS-HDA");
+            strcpy((char*)info.name, (char*)PCI::GetDeviceName(hda->hdr->Header.VendorID, hda->hdr->Header.DeviceID));
+            strcpy((char*)info.longname, (char*)PCI::GetVendorName(hda->hdr->Header.VendorID));
+            strcat((char*)info.name, " - ");
+            strcat((char*)info.name, (char*)PCI::GetDeviceName(hda->hdr->Header.VendorID, hda->hdr->Header.DeviceID));
+            strcpy((char*)info.mixername, (char*)PCI::GetDeviceName(hda->hdr->Header.VendorID, hda->hdr->Header.DeviceID));
+            strcpy((char*)info.components, "HDA"); // I am just guessing at this point
+            break;
+        }
+        case SNDRV_CTL_IOCTL_PVERSION: {
+            *(int*)arg = SNDRV_CTL_VERSION;
+            break;
+        }
+        case SNDRV_CTL_IOCTL_PCM_PREFER_SUBDEVICE: {
+            *(int*)arg = 0;
+            break;
+        }
+        case SNDRV_CTL_IOCTL_ELEM_LIST: {
+            struct snd_ctl_elem_list* list = (struct snd_ctl_elem_list*)arg;
+            list->used = 1;
+            list->count = 1;
+            list->pids[0].iface = 0;
+            list->pids[0].device = hda->card_num;
+            list->pids[0].subdevice = 0;
+            list->pids[0].index = 0;
+            strcpy((char*)list->pids[0].name, "Master");
+            break;
+        }
+        case SNDRV_CTL_IOCTL_SUBSCRIBE_EVENTS:{
+            int a = *arg;
+            node->data_read = false;
+            break;
+        }
+        default:{
+            return -ENOSYS;
+        }
+    }
+    return 0;
+}
+int HDA::RegisterControl(){
+    char name[48] = {};
+    strcpy(name, "controlC");
+    strcat(name, toString((uint64_t)snd_dev));
+    
+    vnode_t* dev = vfs::resolve_path("/dev");
+    if (dev == nullptr) dev = vfs::mount_node("dev", VDIR, vfs::get_root_node());
+
+    vnode_t* snd = vfs::resolve_path("/dev/snd");
+    if (snd == nullptr) snd = vfs::mount_node("snd", VDIR, dev);
+
+    vnode_t* control = vfs::mount_node(name, VCHR, snd);
+    control->ops.iocntl = hda_ioctl;
+    control->misc_data[0] = this;
+
+    return 0;
+}
+
+static inline void snd_mask_none(struct snd_mask *mask)
+{
+	memset(mask, 0, sizeof(*mask));
+}
+
+
+static inline void snd_mask_set(struct snd_mask *mask, unsigned int val)
+{
+	mask->bits[MASK_OFS(val)] |= MASK_BIT(val);
+}
+
+static inline bool snd_mask_isset(struct snd_mask *mask, unsigned int val)
+{
+	return (mask->bits[MASK_OFS(val)] &= MASK_BIT(val)) != 0;
+}
+
+int HDA_SUPPORT_RATE_BIT_TO_FREQ[] = {
+    8000, 11025, 16000, 22050,
+    32000, 44100, 48000, 88200,
+    96000, 176400, 192000, 384000  
+};
+
+int HDA::LowestSupportedRate(){
+    // bits 11:0 are the supported rates (HDA spec rev. 1.0a page 206)
+    for (int i = 0; i <= 11; i++){
+        if (hda_output_amp_node_rates & (1 << i)) return HDA_SUPPORT_RATE_BIT_TO_FREQ[i];
+    }
+    return -1;
+}
+
+int HDA::HighestSupportedRate(){
+    // bits 11:0 are the supported rates (HDA spec rev. 1.0a page 206)
+    for (int i = 11; i >= 0; i--){
+        if (hda_output_amp_node_rates & (1 << i)) return HDA_SUPPORT_RATE_BIT_TO_FREQ[i];
+    }
+    return -1;
+}
+
+int HDA_SUPPORT_SAMPLE_BIT[] = {
+    8, 16, 20, 24, 32
+};
+
+
+int HDA::LowestSupportedSampleSize(){
+    for (int i = 0; i < 5; i++){
+        if (hda_output_amp_node_rates & (1 << (i + 16))) return HDA_SUPPORT_SAMPLE_BIT[i];
+    }
+    return -1;
+}
+
+int HDA::HighestSupportedSampleSize(){
+    for (int i = 4; i >= 0; i--){
+        if (hda_output_amp_node_rates & (1 << (i + 16))) return HDA_SUPPORT_SAMPLE_BIT[i];
+    }
+    return -1;
+}
+
+
+
+
+void HDA::hwparams(snd_pcm_hw_params* params){
+    struct snd_interval *rate = &params->intervals[SNDRV_PCM_HW_PARAM_RATE - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+    unsigned int requested_rate = rate->min;
+    rate->max = requested_rate;
+
+    params->rate_num = requested_rate;
+    params->rate_den = 1;
+
+    struct snd_interval *channels = &params->intervals[SNDRV_PCM_HW_PARAM_CHANNELS - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+    unsigned int requested_channels = channels->max;
+    channels->min = requested_channels;
+
+    
+    struct snd_interval *bits = &params->intervals[SNDRV_PCM_HW_PARAM_SAMPLE_BITS - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+    struct snd_mask *fmt = &params->masks[SNDRV_PCM_HW_PARAM_FORMAT - SNDRV_PCM_HW_PARAM_FIRST_MASK];
+    int sample_size = 16;
+
+    if (snd_mask_isset(fmt, SNDRV_PCM_FORMAT_S32_LE)){
+        sample_size = 32;
+    }else if (snd_mask_isset(fmt, SNDRV_PCM_FORMAT_S24_LE)){
+        sample_size = 24;
+    }else if (snd_mask_isset(fmt, SNDRV_PCM_FORMAT_S16_LE)){
+        sample_size = 16;
+    }else if (snd_mask_isset(fmt, SNDRV_PCM_FORMAT_S8)){
+        sample_size = 8;
+    }
+
+    if (sample_size == 0){
+        sample_size = bits->max;
+        bits->min = sample_size;
+    }
+
+    if (sample_size == 8){
+        snd_mask_set(fmt, SNDRV_PCM_FORMAT_S8);
+    }else if (sample_size == 16){
+        snd_mask_set(fmt, SNDRV_PCM_FORMAT_S16_LE);
+    }else if (sample_size == 24){
+        snd_mask_set(fmt, SNDRV_PCM_FORMAT_S24_LE);
+    }else if (sample_size == 32){
+        snd_mask_set(fmt, SNDRV_PCM_FORMAT_S32_LE);
+    }
+
+    params->msbits = sample_size;
+
+    uint32_t frame_bits = sample_size * requested_channels;
+    uint32_t frame_bytes = DIV_ROUND_UP(frame_bits, 8);
+    struct snd_interval *frame = &params->intervals[SNDRV_PCM_HW_PARAM_FRAME_BITS - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+    frame->min = frame->max = frame_bytes * 8;
+
+    struct snd_interval *period_sz = &params->intervals[SNDRV_PCM_HW_PARAM_PERIOD_SIZE - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+    period_sz->max = period_sz->min = (FRAMES_PER_BD * BD_COUNT) / INTERRUPT_FREQ;
+
+    struct snd_interval *period_bytes = &params->intervals[SNDRV_PCM_HW_PARAM_PERIOD_BYTES - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+    period_bytes->min = period_bytes->max = period_sz->min * frame_bytes;
+
+    
+
+    struct snd_interval *periods = &params->intervals[SNDRV_PCM_HW_PARAM_PERIODS - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+    periods->min = periods->max = BD_COUNT / INTERRUPT_FREQ;
+
+    unsigned int period_time_us = (1000000 * period_sz->min) / requested_rate;
+    struct snd_interval *period_time = &params->intervals[SNDRV_PCM_HW_PARAM_PERIOD_TIME - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+    period_time->max = period_time->min = period_time_us;
+
+
+    struct snd_interval *buffer_size = &params->intervals[SNDRV_PCM_HW_PARAM_BUFFER_SIZE - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+    buffer_size->min = buffer_size->max = FRAMES_PER_BD * BD_COUNT;
+
+
+    struct snd_interval *buffer_bytes = &params->intervals[SNDRV_PCM_HW_PARAM_BUFFER_BYTES - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+    buffer_bytes->min = buffer_bytes->max = buffer_size->max * frame_bytes;
+
+
+    selected_frame_size = frame_bytes;
+    
+    struct snd_interval *buffer_time = &params->intervals[SNDRV_PCM_HW_PARAM_BUFFER_TIME - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+    unsigned int buffer_time_us = period_time->min * periods->min;
+    buffer_time->min = buffer_time->max = buffer_time_us;
+
+
+    params->info = SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_MMAP_VALID;
+    params->cmask = params->rmask;
+    selected_format = GetFormat(requested_rate, sample_size, requested_channels);
+}
+
+
+int hda_pcm_ioctl(int op, char* argp, vnode_t* node){
+    HDA* hda = (HDA*)node->misc_data[0];
+    uint64_t* arg = (uint64_t*)argp;
+
+    switch ((unsigned int)op){
+        case SNDRV_PCM_IOCTL_INFO:
+            struct snd_pcm_info info;
+            info.device = hda->card_num;
+            info.subdevice = 0;
+            info.stream = SNDRV_PCM_STREAM_PLAYBACK;
+            strcpy((char*)info.name, "HDA output device");
+            strcpy((char*)info.subname, "HDA output device");
+            strcpy((char*)info.id, "HDA output device");
+
+            info.dev_class = hda->hdr->Header.Class;
+            info.dev_subclass = hda->hdr->Header.Subclass;
+            memcpy_simd(arg, &info, sizeof(info));
+            return 0;
+        case SNDRV_PCM_IOCTL_PVERSION:
+            *(int*)arg = SNDRV_PCM_VERSION;
+            return 0;
+        case SNDRV_PCM_IOCTL_USER_PVERSION:
+            *(int*)arg = SNDRV_PCM_VERSION;
+            return 0;
+        case SNDRV_PCM_IOCTL_TTSTAMP:
+            return 0;
+        case SNDRV_PCM_IOCTL_HW_REFINE: {
+            struct snd_pcm_hw_params* params = (struct snd_pcm_hw_params*)arg;
+
+            unsigned int highest_rate = hda->HighestSupportedRate();
+            unsigned int lowest_rate = hda->LowestSupportedRate();
+            unsigned int highest_sample = hda->HighestSupportedSampleSize();
+            unsigned int lowest_sample = hda->LowestSupportedSampleSize();
+            
+            if (params->rmask & SNDRV_PCM_HW_PARAM_RATE){
+                // Set rate interval
+                struct snd_interval *rate = &params->intervals[SNDRV_PCM_HW_PARAM_RATE - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+                *rate = {
+                    .min = (rate->min < lowest_rate || rate->min > highest_rate) ? lowest_rate : rate->min,
+                    .max = (rate->max > highest_rate || rate->max < lowest_rate) ? highest_rate : rate->max,
+                    .integer = 1,
+                    .empty = 0
+                };
+                params->cmask |= SNDRV_PCM_HW_PARAM_RATE;
+            }
+
+
+            if (params->rmask & SNDRV_PCM_HW_PARAM_CHANNELS){
+                // Set channels (e.g. stereo)
+                struct snd_interval *chans = &params->intervals[SNDRV_PCM_HW_PARAM_CHANNELS - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+                *chans = {
+                    .min = (chans->min < 1 || chans->min > 2) ? 1 : chans->min,
+                    .max = (chans->max > 2 || chans->max < 1) ? 2 : chans->max,
+                    .integer = 1,
+                    .empty = 0,
+                };
+                params->cmask |= SNDRV_PCM_HW_PARAM_CHANNELS;
+            }
+
+            if (params->rmask & SNDRV_PCM_HW_PARAM_SAMPLE_BITS){
+                // Set sample bits
+                struct snd_interval *bits = &params->intervals[SNDRV_PCM_HW_PARAM_SAMPLE_BITS - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+                *bits = {
+                    .min = (bits->min < lowest_sample || bits->min > highest_sample) ? lowest_sample : bits->min,
+                    .max = (bits->max > highest_sample || bits->max < lowest_sample) ? highest_sample : bits->max,
+                    .integer = 1,
+                    .empty = 0,
+                };
+                params->cmask |= SNDRV_PCM_HW_PARAM_SAMPLE_BITS;
+            }
+
+            if (params->rmask & SNDRV_PCM_HW_PARAM_FORMAT){
+                // Format mask
+                struct snd_mask *fmt = &params->masks[SNDRV_PCM_HW_PARAM_FORMAT - SNDRV_PCM_HW_PARAM_FIRST_MASK];
+                snd_mask_none(fmt);
+                if (hda->hda_output_amp_node_rates & (1 << 16)) snd_mask_set(fmt, SNDRV_PCM_FORMAT_S8);
+                if (hda->hda_output_amp_node_rates & (1 << 17)) snd_mask_set(fmt, SNDRV_PCM_FORMAT_S16_LE);
+                if (hda->hda_output_amp_node_rates & (1 << 19)) snd_mask_set(fmt, SNDRV_PCM_FORMAT_S24_LE);
+                if (hda->hda_output_amp_node_rates & (1 << 20)) snd_mask_set(fmt, SNDRV_PCM_FORMAT_S32_LE);
+                params->cmask |= SNDRV_PCM_HW_PARAM_FORMAT;
+            }
+
+            if (params->rmask & SNDRV_PCM_HW_PARAM_PERIOD_BYTES){
+                // Period + buffer sizes
+                struct snd_interval *period = &params->intervals[SNDRV_PCM_HW_PARAM_PERIOD_BYTES - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+                *period = {
+                    .min = 1024,
+                    .max = 8192,
+                    .integer = 1,
+                    .empty = 0,
+                };
+                params->cmask |= SNDRV_PCM_HW_PARAM_PERIOD_BYTES;
+            }
+
+            if (params->rmask & SNDRV_PCM_HW_PARAM_BUFFER_BYTES){
+                struct snd_interval *buffer = &params->intervals[SNDRV_PCM_HW_PARAM_BUFFER_BYTES - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+                *buffer = {
+                    .min = 2048,
+                    .max = 16384,
+                    .integer = 1,
+                    .empty = 0,
+                };
+                params->cmask |= SNDRV_PCM_HW_PARAM_BUFFER_BYTES;
+            }
+
+            if (params->rmask & SNDRV_PCM_HW_PARAM_SUBFORMAT){
+                struct snd_mask *subformat = &params->masks[SNDRV_PCM_HW_PARAM_SUBFORMAT - SNDRV_PCM_HW_PARAM_FIRST_MASK];
+                snd_mask_none(subformat);
+                snd_mask_set(subformat, SNDRV_PCM_SUBFORMAT_STD);
+                params->cmask |= SNDRV_PCM_HW_PARAM_SUBFORMAT;
+            }
+
+            params->info = SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_BLOCK_TRANSFER;
+            params->cmask = params->rmask;
+            return 0;
+        }
+        case SNDRV_PCM_IOCTL_HW_PARAMS: {
+            hda->hwparams((struct snd_pcm_hw_params*)arg);
+            return 0;
+        }
+        case SNDRV_PCM_IOCTL_HW_FREE:
+            return 0;
+        case SNDRV_PCM_IOCTL_SW_PARAMS:{
+            return 0;
+        }
+        case SNDRV_PCM_IOCTL_PREPARE:
+            hda->Prepare();
+            return 0;
+        case SNDRV_PCM_IOCTL_DROP:{
+            hda->Prepare();
+            return 0;
+        }
+        case SNDRV_PCM_IOCTL_WRITEI_FRAMES: {
+            struct snd_xferi* data = (struct snd_xferi*)arg;
+            data->result = hda->PlaySample((uint8_t*)data->buf, data->frames);
+            return 0;
+        }
+    }
+    return -ENOSYS;
+}
+
+int HDA::RegisterOutput(){
+    char name[48] = {};
+    strcpy(name, "pcmC");
+    strcat(name, toString((uint64_t)snd_dev));
+    strcat(name, "D0p"); // to-do add support for multiple ports
+
+    vnode_t* dev = vfs::resolve_path("/dev");
+    if (dev == nullptr) dev = vfs::mount_node("dev", VDIR, vfs::get_root_node());
+
+    vnode_t* snd = vfs::resolve_path("/dev/snd");
+    if (snd == nullptr) snd = vfs::mount_node("snd", VDIR, dev);
+
+    vnode_t* pcm = vfs::mount_node(name, VCHR, snd);
+    pcm->ops.iocntl = hda_pcm_ioctl;
+    pcm->misc_data[0] = this;
+
+    return 0;
 }

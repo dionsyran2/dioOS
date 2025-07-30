@@ -35,42 +35,21 @@ namespace filesystem{
         return ret;
     }
 
-    int fat32_list_dir(vnode** out_list, size_t* out_count, vnode_t* this_node){
-        fat32* fs = (fat32*)this_node->fs_sec_data;
-        FAT_DIR* dir = (FAT_DIR*)this_node->fs_data;
-
-        if (dir){
-            if (dir->attributes != FAT_DIRECTORY) return -1; //its not a directory... dont wanna print the contents of grub.cfg again :)
-        }
-
-        size_t sz = 0;
-
-        fs->_list_dir(dir, out_list, &sz);
-
-        for (int i = 0; i < this_node->num_of_children; i++){
-            out_list[sz] = this_node->children[i];
-            sz++;
-        }
-
-        *out_count = sz;
-        return 0;
-    }
-
     void* fat32_load(size_t* cnt, vnode_t* this_node){
-        fat32* fs = (fat32*)this_node->fs_sec_data;
+        /*fat32* fs = (fat32*)this_node->fs_sec_data;
         FAT_DIR* dir = (FAT_DIR*)this_node->fs_data;
 
-        return fs->_load_dir(dir, cnt);
+        return fs->_load_dir(dir, cnt);*/
     }
 
     int fat32_write(const char* txt, size_t length, vnode_t* this_node){
-        fat32* fs = (fat32*)this_node->fs_sec_data;
+        /*fat32* fs = (fat32*)this_node->fs_sec_data;
         FAT_DIR* dir = (FAT_DIR*)this_node->fs_data;
-        return fs->write_data(dir, (FAT_DIR*)this_node->parent->fs_data, (char*)txt, length);
+        return fs->write_data(dir, (FAT_DIR*)this_node->parent->fs_data, (char*)txt, length);*/
     }
 
     int fat32_create_dir(const char* fn, bool directory, vnode_t* this_node){
-        fat32* fs = (fat32*)this_node->fs_sec_data;
+        /*fat32* fs = (fat32*)this_node->fs_sec_data;
         FAT_DIR* dir = (FAT_DIR*)this_node->fs_data;
         FAT_DIR* dirEntry = fs->_make_dir(dir, directory, (char*)fn);
         if (dirEntry != nullptr){
@@ -78,7 +57,7 @@ namespace filesystem{
             this_node->children[this_node->num_of_children] = node;
             this_node->num_of_children++;
         }
-        return dirEntry != nullptr ? 0 : -1;
+        return dirEntry != nullptr ? 0 : -1;*/
     }
 
     fat32::fat32(vblk_t* blk, uint64_t start_block){
@@ -168,7 +147,7 @@ namespace filesystem{
     }
 
     void fat32::_init(){
-        _parse_data();
+        /*_parse_data();
         _load_fat();
         
         vnode_t* fs = vfs::get_root_node();
@@ -191,7 +170,7 @@ namespace filesystem{
         fs->ops.load = fat32_load;
         fs->ops.write = fat32_write;
         fs->ops.create_subdirectory = fat32_create_dir;
-        _mount_dir(nullptr, fs);
+        _mount_dir(nullptr, fs);*/
     }
 
     uint8_t* fat32::_load_dir(FAT_DIR* dir, size_t* cnt){
@@ -272,8 +251,8 @@ namespace filesystem{
 
             vnode_t* node = _create_vnode_from_fat_dir(directory, _parse_name(data, i));
             node->parent = parent;
-            parent->children[parent->num_of_children] = node;
-            parent->num_of_children++;
+            //parent->children[parent->num_of_children] = node;
+            //parent->num_of_children++;
 
             if (directory->attributes == FAT_DIRECTORY) _mount_dir(directory, node);
         }
@@ -407,14 +386,14 @@ namespace filesystem{
         memset(node, 0, sizeof(vnode_t));
 
         strcpy(node->name, name);
-        node->fs_data = (void*)dir;
-        node->fs_sec_data = (void*)this;
+        //node->fs_data = (void*)dir;
+        //node->fs_sec_data = (void*)this;
         node->type = dir->attributes == FAT_DIRECTORY ? VDIR : VREG;
         node->size = dir->file_size_in_bytes;
         node->ops.read_dir = vfs::def_read_dir;
-        node->ops.load = fat32_load;
+        //node->ops.load = fat32_load;
         node->ops.write = fat32_write;
-        node->ops.create_subdirectory = fat32_create_dir;
+        //node->ops.create_subdirectory = fat32_create_dir;
         return node;
     }
 

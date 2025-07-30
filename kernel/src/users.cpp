@@ -8,8 +8,9 @@ bool load_passwd(){
 
     vnode_t* file = vfs::resolve_path("/etc/passwd");
     if (file == nullptr) return false;
+    file->open();
     size_t cnt = 0;
-    char* data = (char*)file->ops.load(&cnt, file);
+    char* data = (char*)file->ops.read(&cnt, file);
     cnt = strlen(data);
 
 
@@ -105,8 +106,9 @@ bool load_shadow(){
 
     vnode_t* file = vfs::resolve_path("/etc/shadow");
     if (file == nullptr) return false;
+    file->open();
     size_t cnt = 0;
-    char* data = (char*)file->ops.load(&cnt, file);
+    char* data = (char*)file->ops.read(&cnt, file);
     cnt = strlen(data);
 
 

@@ -3,13 +3,14 @@
 #include <kerrno.h>
 #include <syscalls/syscalls.h>
 #include <drivers/audio/pc_speaker/pc_speaker.h>
+//#define SERIAL_TTY    // Dump writes to the serial
 
 
 namespace tty{
     tty_t* focused_tty = nullptr;
 
     int vnode_tty_iocntl(int op, char* argp, vnode_t* node){
-        tty_t* tty = (tty_t*)node->fs_data;
+        tty_t* tty = (tty_t*)node->misc_data[0];
         switch (op){
             case TCGETS:{
                 memcpy(argp, &tty->term, sizeof(termios));
@@ -54,7 +55,7 @@ namespace tty{
                 break;
             }
             default:
-                serialf("TTY IOCNTL: %llx %llx\n\r", op, argp);
+                //serialf("TTY IOCNTL: %llx %llx\n\r", op, argp);
                 return -ENOTTY;
         }
         return 0;
@@ -62,20 +63,21 @@ namespace tty{
 
     /* CALLS */
     int vnode_tty_write(const char* txt, size_t length, vnode_t* node){
-        tty_t* tty = (tty_t*)node->fs_data;
+        tty_t* tty = (tty_t*)node->misc_data[0];
         return tty->in_pipe->write(txt, length); // why have i named every data buffer a txt... idc anymore, txt it is.
     }
 
     void* vnode_tty_read(size_t* length, vnode* node){
-        tty_t* tty = (tty_t*)node->fs_data;
+        tty_t* tty = (tty_t*)node->misc_data[0];
 
         bool canonical = tty->term.c_lflag & ICANON;
-        while(!tty->out_pipe->data_available) __asm__ ("pause"); // wait for data
+        while(!tty->out_pipe->data_read) __asm__ ("pause"); // wait for data
         if (canonical) while(!tty->newline_entered) __asm__ ("pause"); // if canonical mode is enabled, buffer the data till enter is pressed
         tty->newline_entered = false; // clear the flag
 
-        void* ret = tty->out_pipe->load(length); // return the data
-        node->data_available = tty->out_pipe->data_available;
+        void* ret;
+        tty->out_pipe->read(length, &ret); // return the data
+        node->data_read = tty->out_pipe->data_read;
         return ret;
     }
 
@@ -84,10 +86,11 @@ namespace tty{
     uint64_t prev_cursor_ticks;
     void term_task(tty_t* tty){
         while(1){
-            if (tty->in_pipe->data_available){
+            if (tty->in_pipe->data_read){
                 size_t cnt = 0;
-                pipe_data* p = (pipe_data*)tty->in_pipe->fs_data;
-                void* buffer = tty->in_pipe->load(&cnt); // WHY HAVE I NAMED IT LOAD?!?!
+                pipe_data* p = (pipe_data*)tty->in_pipe->misc_data[0];
+                void* buffer;
+                tty->in_pipe->read(&cnt, &buffer); // WHY HAVE I NAMED IT LOAD?!?!
                 if (prev_cursor_state) {globalRenderer->clear_cursor(prev_cursor_pos[0], prev_cursor_pos[1]); prev_cursor_state = false;}
                 tty->print((const char*)buffer, cnt);
             }
@@ -129,13 +132,15 @@ namespace tty{
         }
         vnode_t* tty_node = vfs::mount_node(name, VCHR, dev);
         tty_node->ops.write = vnode_tty_write;
-        tty_node->ops.load = vnode_tty_read;
+        tty_node->ops.read = vnode_tty_read;
         tty_node->ops.iocntl = vnode_tty_iocntl;
-
+        tty_node->data_write = true;
+        tty_node->is_tty = true;
+        
         tty_t* tty = new tty_t;
         memset(tty, 0, sizeof(tty_t));
 
-        tty_node->fs_data = (void*)tty;
+        tty_node->misc_data[0] = (void*)tty;
 
         tty->node = tty_node;
 
@@ -382,7 +387,7 @@ namespace tty{
                         strcat(array, toString(current_column));
                         strcat(array, "R");
                         //out_pipe->write(array, strlen(array));
-                        //node->data_available = true;
+                        //node->data_read = true;
                         //serialf("replied with \\%s %d %d\n\r", array, current_column, current_row);
                         break;
                     }
@@ -523,9 +528,11 @@ namespace tty{
     }
 
     void tty::print(const char* str, uint32_t length){
+        #ifdef SERIAL_TTY
         for (uint32_t i = 0; i < length; i++){
             if (str[i] != '\a') serialf("%c", str[i]);
         }
+        #endif
         for (uint32_t i = 0; i < length; i++){
             if (str[i] == '\0') continue;
             if (str[i] == '\033'){
@@ -641,19 +648,19 @@ namespace tty{
                     break;
                 }
                 case 'E':{
-                    serialf("escape\n");
+                    //serialf("escape\n");
                     out_pipe->write("\x1B", 1);
                     break;
                 }
                 case 0x03:{ // Ctrl + C
-                    serialf("ctrl + c\n");
-                    if (term.c_lflag & ISIG) { // Ctrl+C
-                        serialf("isig\n");
+                    //serialf("ctrl + c\n");
+                    //if (term.c_lflag & ISIG) { // Ctrl+C
+                        //serialf("isig\n");
                         if (foreground_group_id > 0) 
                             task_scheduler::send_signal_to_group(foreground_group_id, SIGINT);
-                        return;
-                    }
-                    out_pipe->write("\x03", 1);
+                        //return;
+                    //}
+                    //out_pipe->write("\x03", 1);
 
                     break;
                 }
@@ -665,13 +672,21 @@ namespace tty{
                     out_pipe->write("\x04", 1);
                     break;
                 }
+                case 'x':{ // Ctrl + X
+                    out_pipe->write("\x18", 1);
+                    break;
+                }
+                case '~' : { // Delete
+                    out_pipe->write("\x1B[3~", 1);
+                    break;
+                }
                 default:
                     write_chr('\a');
                     break;
             }
             
             
-            node->data_available = out_pipe->data_available;
+            node->data_read = out_pipe->data_read;
 
             return; // Ignore for now
         }
@@ -685,7 +700,7 @@ namespace tty{
             if (current_column > 0 && prev_cell->is_usr) {
                 // Delete last user-entered char if any
                 delete_pipe_data(out_pipe, 1);
-                node->data_available = out_pipe->data_available;
+                node->data_read = out_pipe->data_read;
                 if (echo) write_chr('\b');
             } else {
                 // Beep if backspace when nothing to delete
@@ -696,7 +711,7 @@ namespace tty{
 
             if (!canonical){
                 out_pipe->write(&ascii, 1);
-                node->data_available = out_pipe->data_available;
+                node->data_read = out_pipe->data_read;
             }
 
             return;
@@ -711,7 +726,7 @@ namespace tty{
             }
 
             out_pipe->write(&ascii, 1);
-            node->data_available = out_pipe->data_available;
+            node->data_read = out_pipe->data_read;
             if (ascii == '\n') {
                 newline_entered = true;
             }

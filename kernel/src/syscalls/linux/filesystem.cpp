@@ -2,6 +2,7 @@
 #include <syscalls/linux/filesystem.h>
 #include <pipe.h>
 void split_path(char* fullpath, char*& parent, char*& name);
+int sys_creat(char *pathname, int mode);
 
 int sys_open(char *pathname, int flags, size_t mode){
     task_t* ctask = task_scheduler::get_current_task();
@@ -68,17 +69,12 @@ int sys_open(char *pathname, int flags, size_t mode){
 
     vnode_t* node = vfs::resolve_path(pathname);
     
-    if (node == nullptr && flags & O_CREAT){
-        char* parent;
-        char* name;
-        split_path(pathname, parent, name);
-
-        vnode_t* pnode = vfs::resolve_path(parent);
-        if (pnode == nullptr) return -ENOENT;
-        pnode->mkfile(name, false);
-
-        node = vfs::resolve_path(pathname);
-        if (node == nullptr) return -ENOMEM;
+    if (node == nullptr && (flags & O_CREAT)){
+        int fd = sys_creat(pathname, mode);
+        if (fd < 0) return fd;
+        open_fd_t* d = ctask->get_fd(fd);
+        d->flags = flags;
+        return fd;
     }
     
     if (node == nullptr){
@@ -96,7 +92,7 @@ int sys_openat(int dirfd, char *pathname, int flags){
     open_fd_t* dir = ctask->get_fd(dirfd);
 
     if (pathname[0] == '.' && (pathname[1] == '/' || pathname[1] == '\0')) {
-        char* cwd = vfs::get_full_path_name(dir->node);
+        char* cwd = vfs::get_full_path_name(dirfd == AT_FDCWD ? ctask->nd_cwd : dir->node);
 
 
         // Remove leading './'
@@ -121,7 +117,8 @@ int sys_openat(int dirfd, char *pathname, int flags){
         pathname = path;
         // serialf("redirected path to %s\n\r", pathname);
     }else if (pathname[0] != '/' && dir == nullptr){
-        char* cwd = vfs::get_full_path_name(dir->node);
+                char* cwd = vfs::get_full_path_name(dirfd == AT_FDCWD ? ctask->nd_cwd : dir->node);
+
 
          // Calculate the size with space for '/' and null terminator
         size_t cwd_len = strlen(cwd);
@@ -142,11 +139,88 @@ int sys_openat(int dirfd, char *pathname, int flags){
         // serialf("redirected path to %s\n\r", pathname);
     }
 
-    vnode_t* node = vfs::resolve_path(pathname);
+    if (strcmp(pathname, "/dev/tty") == 0 || 
+        strcmp(pathname, "/dev/console") == 0 ||
+        strcmp(pathname, "/dev/vc/0") == 0 ||
+        strcmp(pathname, "/dev/systty") == 0 ||
+        strcmp(pathname, "/dev/tty0") == 0 ||
+        strcmp(pathname, "/proc/self/fd/0") == 0 ||// WHY ARE THERE SO MANY VARIATIONS
+        strcmp(pathname, "/proc/self/fd/1") == 0 ||
+        strcmp(pathname, "/proc/self/fd/2") == 0 
+    ){ // redirect it to its own tty
+        open_fd_t* fd = ctask->open_node(ctask->tty);
+        fd->flags = flags;
+        return fd->fd;
+    }
 
-    if (node == nullptr) return -ENOENT;
-    open_fd_t* fd = ctask->open_node(node);
-    fd->flags = flags;
+   return sys_open(pathname, flags, 0);
+}
+
+int sys_creat(char *pathname, int mode){
+    task_t* ctask = task_scheduler::get_current_task();
+    if (pathname[0] == '.' && (pathname[1] == '/' || pathname[1] == '\0')) {
+        char* cwd = vfs::get_full_path_name(ctask->nd_cwd);
+
+        // Remove leading './'
+        char* rel = pathname + 1;
+        if (*rel == '/') rel++;
+
+        // Calculate the size with space for '/' and null terminator
+        size_t cwd_len = strlen(cwd);
+        size_t rel_len = strlen(rel);
+        bool need_slash = (cwd[cwd_len - 1] != '/' && rel_len > 0);
+        size_t total_len = cwd_len + (need_slash ? 1 : 0) + rel_len + 1;
+
+        char* path = new char[total_len];
+        strcpy(path, cwd);
+        if (need_slash) strcat(path, "/");
+        strcat(path, rel);
+
+        // Optional cleanup: remove trailing slash unless root
+        size_t len = strlen(path);
+        if (len > 1 && path[len - 1] == '/') path[len - 1] = '\0';
+
+        pathname = path;
+    }else if (pathname[0] != '/'){
+        char* cwd = vfs::get_full_path_name(ctask->nd_cwd);
+
+         // Calculate the size with space for '/' and null terminator
+        size_t cwd_len = strlen(cwd);
+        size_t rel_len = strlen(pathname);
+        bool need_slash = (cwd[cwd_len - 1] != '/' && rel_len > 0);
+        size_t total_len = cwd_len + (need_slash ? 1 : 0) + rel_len + 1;
+
+        char* path = new char[total_len];
+        strcpy(path, cwd);
+        if (need_slash) strcat(path, "/");
+        strcat(path, pathname);
+
+        // Optional cleanup: remove trailing slash unless root
+        size_t len = strlen(path);
+        if (len > 1 && path[len - 1] == '/') path[len - 1] = '\0';
+
+        pathname = path;
+    }
+
+    if (vfs::resolve_path(pathname) != nullptr) return -EEXIST;
+    if (pathname[strlen(pathname) - 1] == '/') pathname[strlen(pathname) - 1] = '\0'; // remove the trailing '/'
+    
+    char* parent;
+    char* name;
+    split_path(pathname, parent, name);
+    // serialf("PATH: %s NAME: %s\n\r", parent, name);
+    vnode_t* pnode = vfs::resolve_path(parent);
+    if (pnode == nullptr) return -ENOENT;
+    if (pnode->type != VNODE_TYPE::VDIR) return -ENOTDIR;
+    int ret = pnode->mkfile(name, false);
+    if (ret < 0) return ret;
+
+    vnode_t* nd = vfs::resolve_path(pathname);
+    if (nd == nullptr) return -ENOENT;
+
+
+    open_fd_t* fd = ctask->open_node(nd);
+    fd->flags = O_WRONLY;
     return fd->fd;
 }
 
@@ -183,7 +257,7 @@ int sys_write(int fd, void* data, int len){
         ofd->offset += len;
     }
 
-    if (ofd->node->type == VNODE_TYPE::VPIPE){
+    if (ofd->node->type == VNODE_TYPE::VFIFO){
         if (ofd->flags & O_RDONLY) return -EBADE;
     }
 
@@ -209,7 +283,7 @@ int sys_read(int fd, char* buf, size_t count){
     if (ofd == nullptr) return -EBADF;
     if (ofd->node->type == VNODE_TYPE::VDIR) return -EISDIR;
 
-    if (ofd->node->type == VNODE_TYPE::VPIPE){
+    if (ofd->node->type == VNODE_TYPE::VFIFO){
         if (ofd->offset >= ofd->length){
             ofd->data = nullptr;
             ofd->length = 0;
@@ -217,14 +291,14 @@ int sys_read(int fd, char* buf, size_t count){
         }
     }
 
-    if (ofd->data == nullptr && (ofd->node->type == VNODE_TYPE::VREG || ofd->node->type == VNODE_TYPE::VPIPE)){
-        if (ofd->node->type == VNODE_TYPE::VPIPE && ctask->get_fd(ofd->other_end) == nullptr && !ofd->node->data_available) return EOF;  // EOF
-        ofd->data = (char*)ofd->node->load(&ofd->size_in_memory);
-        ofd->length = (ofd->node->type == VNODE_TYPE::VPIPE ? ofd->size_in_memory : ofd->node->size);
+    if (ofd->data == nullptr && (ofd->node->type == VNODE_TYPE::VREG || ofd->node->type == VNODE_TYPE::VFIFO || (ofd->node->type == VNODE_TYPE::VCHR && ofd->node->is_tty == false))){
+        if (ofd->node->type == VNODE_TYPE::VFIFO && ctask->get_fd(ofd->other_end) == nullptr && !ofd->node->data_read) return EOF;  // EOF
+        ofd->node->read(&ofd->size_in_memory, (void**)&ofd->data);
+        ofd->length = (ofd->node->type == VNODE_TYPE::VFIFO ? ofd->size_in_memory : ofd->node->size);
         ofd->offset = 0;
     }
 
-    if (ofd->node->type == VNODE_TYPE::VREG || ofd->node->type == VNODE_TYPE::VPIPE){
+    if (ofd->node->type == VNODE_TYPE::VREG || ofd->node->type == VNODE_TYPE::VFIFO || (ofd->node->type == VNODE_TYPE::VCHR && ofd->node->is_tty == false)){
         if (ofd->offset >= ofd->length && ofd->node->type == VNODE_TYPE::VREG) return EOF;  // EOF
 
         size_t cnt = ofd->length - ofd->offset;
@@ -236,7 +310,7 @@ int sys_read(int fd, char* buf, size_t count){
         ofd->offset += cnt;
 
         return cnt;
-    }else if (ofd->node->type == VNODE_TYPE::VCHR){ // CHR device
+    }else if (ofd->node->is_tty == true){
         size_t cnt = 0;
         uint8_t* data = (uint8_t*)ofd->data;
 
@@ -249,11 +323,11 @@ int sys_read(int fd, char* buf, size_t count){
         }
 
         if (data == nullptr){
-            if (ofd->flags & O_NONBLOCK && !ofd->node->data_available) return -EWOULDBLOCK;
+            if (ofd->flags & O_NONBLOCK && !ofd->node->data_read) return -EWOULDBLOCK;
             asm ("sti");
-            while(ctask->tty->data_available == false);
+            while(ctask->tty->data_read == false);
 
-            data = (uint8_t*)ofd->node->load(&cnt);
+            ofd->node->read(&cnt, (void**)&data);
             asm ("cli");
 
             ofd->offset = 0;
@@ -279,7 +353,82 @@ int sys_read(int fd, char* buf, size_t count){
     return -EBADF;
 }
 
+int sys_pread64(int fd, char* buf, size_t count, size_t off){
+    task_t* ctask = task_scheduler::get_current_task();
 
+    open_fd_t* ofd = ctask->get_fd(fd);
+    if (ofd == nullptr) return -EBADF;
+    if (ofd->node->type == VNODE_TYPE::VDIR) return -EISDIR;
+
+    if (ofd->node->type == VNODE_TYPE::VFIFO){
+        if (ofd->offset >= ofd->length){
+            ofd->data = nullptr;
+            ofd->length = 0;
+            ofd->offset = 0;
+        }
+    }
+
+    if (ofd->data == nullptr && (ofd->node->type == VNODE_TYPE::VREG || ofd->node->type == VNODE_TYPE::VFIFO)){
+        if (ofd->node->type == VNODE_TYPE::VFIFO && ctask->get_fd(ofd->other_end) == nullptr && !ofd->node->data_read) return EOF;  // EOF
+        ofd->node->read(&ofd->size_in_memory, (void**)&ofd->data);
+        ofd->length = (ofd->node->type == VNODE_TYPE::VFIFO ? ofd->size_in_memory : ofd->node->size);
+        ofd->offset = 0;
+    }
+
+    if (ofd->node->type == VNODE_TYPE::VREG || ofd->node->type == VNODE_TYPE::VFIFO || (ofd->node->type == VNODE_TYPE::VCHR && ofd->node->is_tty == false)){
+        if (off >= ofd->length && ofd->node->type == VNODE_TYPE::VREG) return EOF;  // EOF
+
+        size_t cnt = ofd->length - off;
+        void* b = ofd->data + off;
+
+        if (cnt > count) cnt = count;
+        memcpy(buf, b, cnt);
+        
+        off += cnt;
+
+        return cnt;
+    }else if (ofd->node->is_tty){ // CHR device
+        size_t cnt = 0;
+        uint8_t* data = (uint8_t*)ofd->data;
+
+        if (data && ofd->offset >= ofd->length){
+            data = nullptr;
+            ofd->data = nullptr;
+            ofd->offset = 0;
+            ofd->length = 0;
+            ofd->size_in_memory = 0;
+        }
+
+        if (data == nullptr){
+            if (ofd->flags & O_NONBLOCK && !ofd->node->data_read) return -EWOULDBLOCK;
+            asm ("sti");
+            while(ctask->tty->data_read == false);
+
+            ofd->node->read(&cnt, (void**)&data);
+            asm ("cli");
+
+            ofd->offset = 0;
+            ofd->size_in_memory = cnt;
+            ofd->length = cnt;
+            ofd->data = (char*)data;
+        }else{
+            data += ofd->offset;
+            cnt = ofd->length - ofd->offset;
+        }
+        
+
+        if (cnt > count){
+            cnt = count;
+        }
+        
+        ofd->offset += cnt;
+
+        memcpy(buf, data, cnt);
+        
+        return cnt;
+    }
+    return -EBADF;
+}
 
 int sys_readv(int fd, const struct iovec *iov, int iovcnt){
     int total_len = 0;
@@ -301,7 +450,7 @@ int sys_lseek(int fd, int64_t offset, int whence) {
 
     if (ofd == nullptr) return -EBADF;
 
-    if (ofd->node->type == VNODE_TYPE::VDIR || ofd->node->type == VNODE_TYPE::VCHR || ofd->node->type == VNODE_TYPE::VPIPE)
+    if (ofd->node->type == VNODE_TYPE::VDIR || ofd->node->type == VNODE_TYPE::VCHR || ofd->node->type == VNODE_TYPE::VFIFO)
         return -ESPIPE; // Not seekable
 
     int64_t new_offset = 0;
@@ -328,9 +477,7 @@ int sys_lseek(int fd, int64_t offset, int whence) {
 }
 
 
-int sys_ioctl(unsigned int fd, int op, char* argp){
-    if (fd == 19) fd = 1;
-    
+int sys_ioctl(unsigned int fd, int op, char* argp){    
     task_t* ctask = task_scheduler::get_current_task();
 
     open_fd_t* ofd = ctask->get_fd(fd);
@@ -387,7 +534,7 @@ int sys_dup(int oldfd){
 }
 
 
-uint64_t sys_fncntl(int fd, uint64_t op, uint64_t arg){
+uint64_t sys_fcntl(int fd, uint64_t op, uint64_t arg){
     task_t* ctask = task_scheduler::get_current_task();
 
     open_fd_t* ofd = ctask->get_fd(fd);
@@ -395,6 +542,8 @@ uint64_t sys_fncntl(int fd, uint64_t op, uint64_t arg){
     if (ofd == nullptr) return -EBADF;
 
     switch(op){
+        case F_DUPFD:
+            return sys_dup(fd);
         case F_SETFD:
             ofd->flags = arg;
             break;
@@ -478,8 +627,8 @@ int sys_stat(char* pathname, struct stat* statbuf){
 
     vnode_t* node = vfs::resolve_path(pathname);
     if (node == nullptr) return -ENOENT;
-    statbuf->st_dev = (uint64_t)node;
-    statbuf->st_ino = (uint64_t)node;
+    statbuf->st_dev = node->fs_inode;
+    statbuf->st_ino = node->inode;
     statbuf->st_mode =  S_IRUSR | S_IWUSR | S_IXUSR |  // user: rwx
                         S_IRGRP | S_IXGRP |            // group: r-x
                         S_IROTH | S_IXOTH;             // other: r-x
@@ -502,26 +651,36 @@ int sys_stat(char* pathname, struct stat* statbuf){
         case VNODE_TYPE::VSOC :
             statbuf->st_mode |= S_IFSOCK;
             break;
+        case VNODE_TYPE::VFIFO :
+            statbuf->st_mode |= S_IFIFO;
+            break;
     }
 
     statbuf->st_nlink = 1;
-    statbuf->st_uid = task->uid;
-    statbuf->st_gid = task->gid;
-    statbuf->st_rdev = 0;
+    statbuf->st_uid = node->uid;
+    statbuf->st_gid = node->gid;
+    statbuf->st_rdev = 1;
     statbuf->st_size = node->size;
 
     // Size and blocks for regular files and block devices
     if (node->type == VNODE_TYPE::VBLK) {
         vblk_t* blk = (vblk_t*)node;
-        statbuf->st_size = blk->block_size;
+        statbuf->st_size = blk->block_size * blk->block_count;
         statbuf->st_blocks = blk->block_count;
+        statbuf->st_blksize = blk->block_size;
     } else if (node->type == VNODE_TYPE::VREG) {
         statbuf->st_size = node->size;
         statbuf->st_blocks = (node->size + 511) / 512; // approximate block count
-    } else {
-        statbuf->st_size = 0;
-        statbuf->st_blocks = 0;
+        statbuf->st_blksize = 4096; // yes, i know i should be getting that from the fs, stop screaming 
     }
+
+    statbuf->st_atim.tv_nsec = 0;
+    statbuf->st_atim.tv_sec = node->last_accessed;
+    statbuf->st_mtim.tv_nsec = 0;
+    statbuf->st_mtim.tv_sec = node->last_modified;
+    statbuf->st_ctim.tv_nsec = 0;
+    statbuf->st_ctim.tv_sec = node->creation_time;
+
     
     return 0;
 }
@@ -545,7 +704,7 @@ int sys_newfstatat(int dirfd, char* pathname, stat* statbuf, int flags){
     open_fd_t* dir = ctask->get_fd(dirfd);
 
     if (pathname[0] == '.' && (pathname[1] == '/' || pathname[1] == '\0')) {
-        char* cwd = vfs::get_full_path_name(dir->node);
+        char* cwd = vfs::get_full_path_name(dirfd == AT_FDCWD ? ctask->nd_cwd : dir->node);
 
         // Remove leading './'
         char* rel = pathname + 1;
@@ -569,7 +728,7 @@ int sys_newfstatat(int dirfd, char* pathname, stat* statbuf, int flags){
         pathname = path;
         // serialf("redirected path to %s\n\r", pathname);
     }else if (pathname[0] != '/' && dir == nullptr){
-        char* cwd = vfs::get_full_path_name(dir->node);
+        char* cwd = vfs::get_full_path_name(dirfd == AT_FDCWD ? ctask->nd_cwd : dir->node);
 
          // Calculate the size with space for '/' and null terminator
         size_t cwd_len = strlen(cwd);
@@ -602,7 +761,7 @@ int sys_poll(pollfd *fds, int nfds, int timeout){
         open_fd_t* fd = ctask->get_fd(fds[0].fd);
         if (fd == nullptr) return -EINVAL;
         asm ("sti");
-        while(fd->node->data_available == false){
+        while(fd->node->data_read == false){
             if (timeout > 0 && (APICticsSinceBoot - start_time) >= (uint64_t)timeout) return -ETIMEDOUT;
         }
         asm ("cli");
@@ -627,13 +786,12 @@ int sys_poll(pollfd *fds, int nfds, int timeout_ms) {
             open_fd_t* fd = ctask->get_fd(fds[i].fd);
             if (!fd) continue;
 
-            if ((fds[i].events & POLLIN) && (fd->node->data_available || ((fd->data && fd->offset < fd->length) && fd->node->type == VNODE_TYPE::VCHR))) {
+            if ((fds[i].events & POLLIN) && (fd->node->data_read || ((fd->data && fd->offset < fd->length) && (fd->node->type == VNODE_TYPE::VCHR || fd->node->type == VNODE_TYPE::VFIFO)))) {
                 fds[i].revents |= POLLIN;
                 any_ready = true;
             }
 
-            if (fds[i].events & POLLOUT) {
-                // Simplified: assume writable
+            if (fds[i].events & POLLOUT && (fd->node->data_write || ((fd->data && fd->offset < fd->length) && (fd->node->type == VNODE_TYPE::VCHR || fd->node->type == VNODE_TYPE::VFIFO)))) {
                 fds[i].revents |= POLLOUT;
                 any_ready = true;
             }
@@ -663,7 +821,7 @@ int sys_poll(pollfd *fds, int nfds, int timeout_ms) {
 int pipe(int fds[2], int flags){
     task_t* ctask = task_scheduler::get_current_task();
     vnode_t* pipe = CreatePipe(ctask->name, nullptr);
-    pipe->type = VNODE_TYPE::VPIPE;
+    pipe->type = VNODE_TYPE::VFIFO;
     open_fd_t* input = ctask->open_node(pipe);
     open_fd_t* out = ctask->open_node(pipe);
     input->flags = O_WRONLY;
@@ -689,7 +847,7 @@ int sys_faccessat(int dirfd, char *pathname, int mode, int flags){
     open_fd_t* dir = ctask->get_fd(dirfd);
 
     if (pathname[0] == '.' && (pathname[1] == '/' || pathname[1] == '\0')) {
-        char* cwd = vfs::get_full_path_name(dir->node);
+        char* cwd = vfs::get_full_path_name(dirfd == AT_FDCWD ? ctask->nd_cwd : dir->node);
 
         // Remove leading './'
         char* rel = pathname + 1;
@@ -713,7 +871,7 @@ int sys_faccessat(int dirfd, char *pathname, int mode, int flags){
         pathname = path;
         // serialf("redirected path to %s\n\r", pathname);
     }else if (pathname[0] != '/' && dir == nullptr){
-        char* cwd = vfs::get_full_path_name(dir->node);
+        char* cwd = vfs::get_full_path_name(dirfd == AT_FDCWD ? ctask->nd_cwd : dir->node);
 
          // Calculate the size with space for '/' and null terminator
         size_t cwd_len = strlen(cwd);
@@ -752,7 +910,7 @@ int64_t sys_getdents64(int fd, void* dirp, size_t count){
     if (ofd->node->type != VNODE_TYPE::VDIR) return -ENOTDIR;
     if (count < sizeof(linux_dirent64)) return -EINVAL;
 
-    if (ofd->dl_off >= ofd->node->num_of_children){
+    if (ofd->dl_off >= ofd->node->child_cnt){
         ofd->dl_off = 0;
         return 0;
     }
@@ -760,12 +918,20 @@ int64_t sys_getdents64(int fd, void* dirp, size_t count){
     linux_dirent64* dirent = (linux_dirent64*)dirp;
     int offset = 0;
     
-    for (int i = ofd->dl_off; i < ofd->node->num_of_children; i++){
+    vnode_t* tnode = ofd->node->children;
+    if (ofd->dl_off){
+        for (int i = 0; i < ofd->dl_off; i++){
+            tnode = tnode->next;
+            if (tnode == nullptr) break;
+        }
+    }
+
+    while(tnode != nullptr){
         if ((offset + sizeof(linux_dirent64)) >= count){
             break;
         }
 
-        vnode_t* node = ofd->node->children[i];
+        vnode_t* node = tnode;
         dirent->d_ino = (unsigned long)node;
         dirent->d_reclen = sizeof(linux_dirent64);
         switch (node->type){
@@ -784,7 +950,7 @@ int64_t sys_getdents64(int fd, void* dirp, size_t count){
             case VNODE_TYPE::VLNK:
                 dirent->d_type = DT_LNK;
                 break;
-            case VNODE_TYPE::VPIPE:
+            case VNODE_TYPE::VFIFO:
                 dirent->d_type = DT_FIFO;
                 break;
             case VNODE_TYPE::VREG:
@@ -802,6 +968,7 @@ int64_t sys_getdents64(int fd, void* dirp, size_t count){
         dirent++;
         offset += sizeof(linux_dirent64);
         ofd->dl_off++;
+        tnode = tnode->next;
     }
 
     return offset;
@@ -1012,7 +1179,8 @@ int sys_mkdirat(int dirfd, char *pathname, unsigned long mode){
     open_fd_t* dir = ctask->get_fd(dirfd);
 
     if (pathname[0] == '.' && (pathname[1] == '/' || pathname[1] == '\0')) {
-        char* cwd = vfs::get_full_path_name(dir->node);
+        char* cwd = vfs::get_full_path_name(dirfd == AT_FDCWD ? ctask->nd_cwd : dir->node);
+
 
         // Remove leading './'
         char* rel = pathname + 1;
@@ -1036,7 +1204,7 @@ int sys_mkdirat(int dirfd, char *pathname, unsigned long mode){
         pathname = path;
         // serialf("redirected path to %s\n\r", pathname);
     }else if (pathname[0] != '/' && dir == nullptr){
-        char* cwd = vfs::get_full_path_name(dir->node);
+        char* cwd = vfs::get_full_path_name(dirfd == AT_FDCWD ? ctask->nd_cwd : dir->node);
 
          // Calculate the size with space for '/' and null terminator
         size_t cwd_len = strlen(cwd);
@@ -1080,6 +1248,70 @@ int sys_mkdirat(int dirfd, char *pathname, unsigned long mode){
     return pnode->mkfile(dirname, true);
 }
 
+int sys_pselect(int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds, const timespc* timeout, uint64_t* sigmask){
+    task_t* ctask = task_scheduler::get_current_task();
+    uint64_t sv = ctask->signal_mask;
+    if (sigmask) ctask->signal_mask = *sigmask;
+
+    if (nfds <= 0 || nfds > FD_SETSIZE) return -EINVAL;
+
+    // Convert timeout to milliseconds
+    int timeout_ms = -1;
+    if (timeout) {
+        timeout_ms = (timeout->tv_sec * 1000) + (timeout->tv_nsec / 1000000);
+    }
+
+    // Convert fd_sets to pollfd array
+    pollfd pfds[FD_SETSIZE];
+    int poll_count = 0;
+
+    for (int fd = 0; fd < nfds; ++fd) {
+        short events = 0;
+        if (readfds && FD_ISSET(fd, readfds)) events |= POLLIN;
+        if (writefds && FD_ISSET(fd, writefds)) events |= POLLOUT;
+        // exceptfds are usually for exceptional conditions (e.g. OOB), but we'll ignore for now
+
+        if (events) {
+            pfds[poll_count].fd = fd;
+            pfds[poll_count].events = events;
+            pfds[poll_count].revents = 0;
+            ++poll_count;
+        }
+    }
+
+    int ready = sys_poll(pfds, poll_count, timeout_ms);
+    if (ready < 0) {ctask->signal_mask = sv; return ready;}
+
+    // Clear all sets
+    if (readfds) FD_ZERO(readfds);
+    if (writefds) FD_ZERO(writefds);
+    if (exceptfds) FD_ZERO(exceptfds); // Not used here, but clear anyway
+
+    // Reconstruct fd_sets
+    for (int i = 0; i < poll_count; ++i) {
+        int fd = pfds[i].fd;
+        short revents = pfds[i].revents;
+
+        if (readfds && (revents & POLLIN)) FD_SET(fd, readfds);
+        if (writefds && (revents & POLLOUT)) FD_SET(fd, writefds);
+        // No handling for exceptfds (unless you add POLLPRI logic)
+    }
+
+    ctask->signal_mask = sv; 
+    return ready;
+}
+
+int sys_truncate(const char *path, size_t length){
+    if (vfs::resolve_path(path) == nullptr) return -ENOENT;
+    return 0;
+}
+
+int sys_ftruncate(int fd, size_t length){
+    task_t* ctask = task_scheduler::get_current_task();
+    if (ctask->get_fd(fd) == nullptr) return -EBADFD;
+    return 0;
+}
+
 void register_fs_syscalls(){
     register_syscall(SYSCALL_WRITE, (syscall_handler_t)sys_write);
     register_syscall(SYSCALL_WRITEV, (syscall_handler_t)sys_writev);
@@ -1092,14 +1324,14 @@ void register_fs_syscalls(){
     register_syscall(SYSCALL_CLOSE, (syscall_handler_t)sys_close);
     register_syscall(SYSCALL_DUP, (syscall_handler_t)sys_dup);
     register_syscall(SYSCALL_DUP2, (syscall_handler_t)sys_dup2);
-    register_syscall(SYSCALL_FNCNTL, (syscall_handler_t)sys_fncntl);
+    register_syscall(SYSCALL_FCNTL, (syscall_handler_t)sys_fcntl);
     register_syscall(SYSCALL_STAT, (syscall_handler_t)sys_stat);
     register_syscall(SYSCALL_FSTAT, (syscall_handler_t)sys_fstat);
     register_syscall(SYSCALL_LSTAT, (syscall_handler_t)sys_lstat);
     register_syscall(SYSCALL_NEWFSTATAT, (syscall_handler_t)sys_newfstatat);
     register_syscall(SYSCALL_POLL, (syscall_handler_t)sys_poll);
-    register_syscall(SYSCALL_SELECT, (syscall_handler_t)sys_poll);
     register_syscall(SYSCALL_PIPE, (syscall_handler_t)pipe);
+    register_syscall(SYSCALL_PIPE2, (syscall_handler_t)pipe);
     register_syscall(SYSCALL_FACCESSAT2, (syscall_handler_t)sys_faccessat2);
     register_syscall(SYSCALL_FACCESSAT, (syscall_handler_t)sys_faccessat);
     register_syscall(SYSCALL_ACCESS, (syscall_handler_t)sys_access);
@@ -1107,9 +1339,14 @@ void register_fs_syscalls(){
     register_syscall(SYSCALL_CHDIR, (syscall_handler_t)sys_chdir);
     register_syscall(SYSCALL_FCHDIR, (syscall_handler_t)sys_fchdir);
     register_syscall(SYSCALL_SENDFILE, (syscall_handler_t)sys_sendfile);
-    register_syscall(SYSCALL_SENDFILE, (syscall_handler_t)sys_sendfile);
     register_syscall(SYSCALL_MKDIR, (syscall_handler_t)sys_mkdir);
     register_syscall(SYSCALL_MKDIRAT, (syscall_handler_t)sys_mkdirat);
+    register_syscall(SYSCALL_CREAT, (syscall_handler_t)sys_creat);
+    register_syscall(SYSCALL_PREAD64, (syscall_handler_t)sys_pread64);
+    register_syscall(SYSCALL_PSELECT, (syscall_handler_t)sys_pselect);
+    register_syscall(SYSCALL_TRUNCATE, (syscall_handler_t)sys_truncate);
+    register_syscall(SYSCALL_FTRUNCATE, (syscall_handler_t)sys_ftruncate);
+
 }
 
 /*
