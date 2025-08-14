@@ -2,20 +2,102 @@
 #include <memory.h>
 #include <cstr.h>
 #include <kerrno.h>
+#include <scheduling/apic/apic.h>
+#define MAX_CACHE_SIZE 128 * 1024 * 1024 // cache files under 128MB
+int64_t read_vnode_cache(void* buffer, size_t cnt, size_t offset, vnode_t* node){
+    if (offset >= node->size) return EOF;
+
+    uint64_t to_read = min(node->size - offset, cnt);
+    memcpy(buffer, node->cache + offset, to_read);
+    return to_read;
+}
+
+int64_t write_vnode_cache(void* buffer, size_t cnt, size_t offset, vnode_t* node) {
+    size_t total_size_required = offset + cnt;
+
+    // If too large for cache, flush and write directly
+    if (total_size_required > MAX_CACHE_SIZE) {
+        if (node->write_cache && node->write_cache_size != 0) {
+            node->write(node->write_cache, node->write_cache_size, node->write_cache_offset);
+            GlobalAllocator.FreePages(node->write_cache, node->write_cache_size_in_pages);
+            node->write_cache = nullptr;
+            node->write_cache_offset = 0;
+            node->write_cache_size = 0;
+            node->write_cache_size_in_pages = 0;
+        }
+        return node->write(buffer, cnt, offset);
+    }
+
+    // Check if the write is outside the current cache window
+    bool outside_cache_range = node->write_cache == nullptr ||
+                               offset < node->write_cache_offset ||
+                               (offset + cnt) > (node->write_cache_offset + node->write_cache_size);
+
+    if (outside_cache_range) {
+        // Flush current cache if any
+        if (node->write_cache && node->write_cache_size != 0) {
+            node->write(node->write_cache, node->write_cache_size, node->write_cache_offset);
+            GlobalAllocator.FreePages(node->write_cache, node->write_cache_size_in_pages);
+        }
+
+        // Create a new cache window starting at `offset`
+        node->write_cache_offset = offset;
+        node->write_cache_size = total_size_required - offset;
+        node->write_cache_size_in_pages = DIV_ROUND_UP(node->write_cache_size, 0x1000);
+        node->write_cache = (uint8_t*)GlobalAllocator.RequestPages(node->write_cache_size_in_pages);
+        memset(node->write_cache, 0, node->write_cache_size);
+    }
+
+    // Write into cache
+    memcpy_simd(node->write_cache + (offset - node->write_cache_offset), buffer, cnt);
+    node->edited = true;
+    return cnt;
+}
+
 
 int vnode_t::open(){
+    if (this == nullptr) return -EFAULT;
+    if (type == VREG && size < MAX_CACHE_SIZE && (flags & VFS_NO_CACHE) == 0 && cache == nullptr) {
+        uint8_t* cache = new uint8_t[size];
+        read(cache, size, 0);
+        this->cache = cache;
+    }
     ref_cnt++;
     return 0;
 }
 
 int vnode_t::close(){
-    ref_cnt--;
-    if (ref_cnt == 0){
-        if (data != nullptr) free(data);
-        data_size = 0;
-        data = nullptr;
+    if (this == nullptr) return -EFAULT;
+    if (ref_cnt > 0) ref_cnt--;
+    if (ref_cnt == 0 && cache != nullptr) {
+        delete[] cache;
+        cache = nullptr;
     }
+    if (edited && write_cache){
+        edited = false;
+        bypass_write_cache = true;
+        write(cache, write_cache_size, write_cache_offset);
+        bypass_write_cache = false;
+        GlobalAllocator.FreePages(write_cache, write_cache_size_in_pages);
+        write_cache = nullptr;
+        write_cache_offset = 0;
+        write_cache_size = 0;
+        write_cache_size_in_pages = 0;
+        if (cache){
+            delete[] cache;
+            cache = nullptr;
+        }
+    }
+    if (ref_cnt == 0 && !is_static) delete this;
     return 0;
+}
+
+int64_t vnode_t::truncate(size_t size){
+    if (ops.truncate != nullptr){
+        int64_t ret = ops.truncate(size, this);
+        return ret < 0 ? ret : 0;
+    }
+    return -EFAULT;
 }
 
 int vnode_t::iocntl(int op, char* argp){
@@ -26,37 +108,21 @@ int vnode_t::iocntl(int op, char* argp){
     return -ENOSYS;
 }
 
-int vnode_t::read(size_t* cnt, void** buf){
+int64_t vnode_t::read(void* buffer, size_t cnt, size_t offset){
     if (ops.read != nullptr){
-        if (type != VFIFO && type != VCHR && (flags & VFS_NO_CACHE) == 0){
-            if (data == nullptr){
-                size_t c = 0;
-                data = (uint8_t*)ops.read(&c, this);
-                data_size = c;
-            }
-            *buf = (void*)data;
-            *cnt = data_size;
-            return 0;
-        }else{
-            *buf = ops.read(cnt, this);
-            return 0;
-        }
+        if (cache) return read_vnode_cache(buffer, cnt, offset, this);
+        return ops.read(buffer, cnt, offset, this);
     }
     return -ENOSYS;
 }
 
-int vnode_t::write(const char* txt, size_t length){
+int64_t vnode_t::write(const void* buffer, size_t cnt, size_t offset){
     if (flags & VFS_RO) return -EACCES;
-    
     if (ops.write != nullptr){
-        if (type != VFIFO && type != VCHR){
-            if (data != nullptr) free(data);
-            data = nullptr;
-            serialf("Cleared!\n");
-        }
-        return ops.write(txt, length, this);
+        //if (type == VREG && size < MAX_CACHE_SIZE && (flags & VFS_NO_CACHE) == 0 && !bypass_write_cache) return write_vnode_cache((void*)buffer, cnt, offset, this);
+        return ops.write(buffer, cnt, offset, this);
     }
-    return -ENOSYS;
+    return -EROFS;
 }
 
 int vnode_t::mkfile(const char* fn, bool dir){
@@ -72,6 +138,48 @@ int vnode_t::mkfile(const char* fn, bool dir){
     return -EROFS;
 }
 
+int vnode_t::read_dir(vnode_t** out){
+    if (type != VDIR) return -ENOTDIR;
+    vnode_t* start = static_children;
+    vnode_t* end = nullptr;
+    int cnt = 0;
+
+    if (start != nullptr) {
+        end = start;
+        cnt = 1;
+        while (end->next != nullptr) {
+            end = end->next;
+            cnt++;
+        }
+    }
+
+    if (ops.read_dir != nullptr) {
+        vnode_t* fs_ret = nullptr;
+        int ret = ops.read_dir(&fs_ret, this);
+        if (ret < 0) return ret;
+        if (ret > 0){
+            cnt += ret;
+
+            start = fs_ret;
+            if (static_children != nullptr){
+                end = fs_ret;
+                while(end->next != nullptr) end = end->next;
+                end->next = static_children;
+            }
+        }
+    }
+
+    *out = start;
+    return cnt;
+}
+
+int vnode_t::save_entry(){
+    if (ops.save_entry != nullptr){
+        return ops.save_entry(this);
+    }else{
+        return -ENOSYS;
+    }
+}
 
 bool vblk::read(uint64_t block, uint64_t block_count, void* buffer){
     if (blk_ops.read != nullptr){
@@ -91,25 +199,15 @@ bool vblk::write(uint64_t block, uint64_t block_count, const void* buffer){
 namespace vfs{
     vnode_t* start_node = nullptr; // the start of the node (the "/" directory)
 
-    int def_read_dir(vnode** out_list, size_t* out_count, vnode_t* this_node){
-        int i = 0;
-        vnode_t* node = this_node->children;
-        while(node != nullptr){
-            out_list[i] = node;
-            node = node->next;
-            i++;
-        }
-
-        *out_count = i;
+    int def_read_dir(vnode** out_list, vnode_t* this_node){
         return 0;
     }
 
-    void* def_read(size_t* cnt, vnode_t*){
-        *cnt = 0;
-        return nullptr;
+    int64_t def_read(void* buffer, size_t cnt, size_t offset, vnode_t*){
+        return 0;
     }
 
-    int def_write(const char* txt, size_t length, vnode* this_node){
+    int64_t def_write(const void* buffer, size_t cnt, size_t offset, vnode* this_node){
         return -EACCES;
     }
 
@@ -119,8 +217,10 @@ namespace vfs{
 
         start_node->type = VNODE_TYPE::VDIR;
         strcpy(start_node->name, "/");
+        strcpy(start_node->pathname, "/");
         start_node->ops.read_dir = def_read_dir;
         start_node->ops.read = def_read;
+        start_node->is_static = true;
     }
 
     vnode_t* get_root_node(){
@@ -144,7 +244,7 @@ namespace vfs{
                 break; // reached end of path
 
             // Copy component into buffer
-            char component[33]; // match your `name[32]` + null terminator
+            char component[257];
             if (len >= sizeof(component))
                 return nullptr; // name too long
 
@@ -153,17 +253,27 @@ namespace vfs{
 
             // Search for matching child
             vnode_t* next = nullptr;
-            size_t cnt = 0;
 
-            vnode_t* children[128];
-            current->ops.read_dir(children, &cnt, current);
-            for (int i = 0; i < cnt; i++) {
-                if (strcmp(children[i]->name, component) == 0) {
-                    next = children[i];
-                    break;
+            vnode_t* children;
+            size_t cnt = current->read_dir(&children);
+
+            if (strcmp("..", component) == 0){
+                next = current->parent != nullptr ? current->parent : get_root_node();
+            }else if (strcmp(".", component) == 0){
+                next = current;
+            }else{
+                while (children != nullptr){
+                    if (strcmp(children->name, component) == 0) {
+                        if (next != nullptr && next->is_static == false) delete next;
+                        next = children;
+                        break;
+                    }
+                    vnode_t* prev = children;
+                    children = children->next;
+                    if (prev->is_static == false) delete prev;
                 }
             }
-
+            
             if (!next)
                 return nullptr; // path component not found
 
@@ -172,7 +282,7 @@ namespace vfs{
             // Skip '/'
             start = (*end == '/') ? end + 1 : end;
         }
-
+        strcpy(current->pathname, (char*)path);
         return current;
     }
 
@@ -208,11 +318,11 @@ namespace vfs{
             }
         }
         
-        if (parent->children == nullptr){
-            parent->children = node;
+        if (parent->static_children == nullptr){
+            parent->static_children = node;
             parent->child_cnt = 1;
         }else{
-            vnode_t* tnode = parent->children;
+            vnode_t* tnode = parent->static_children;
             
             while(true){
                 if (tnode->next == nullptr){
@@ -235,6 +345,7 @@ namespace vfs{
         node->next = nullptr;
         node->data_read = true;
         node->data_write = true;
+        node->is_static = true;
 
         node->ops.read_dir = def_read_dir;
         node->ops.read = def_read;
@@ -246,12 +357,15 @@ namespace vfs{
     }
 
     void _print_dir(vnode_t* node){
-        vnode_t* out_list[128];
-        size_t out_count;
+        vnode_t* out_list;
+        int out_count = node->read_dir(&out_list);
+        if (out_count < 0) return;
 
-        node->ops.read_dir(out_list, &out_count, node);
         for (size_t i = 0; i < out_count; i++){
-            kprintf("> %s\n", out_list[i]->name);
+            kprintf("> %s\n", out_list->name);
+            vnode_t* prev = out_list;
+            out_list = out_list->next;
+            if (prev->is_static == false) delete prev;
         }
     }
 
@@ -275,36 +389,21 @@ namespace vfs{
 
         if (depth > 0) strcat(new_prefix, is_last ? "    " : "|   ");
 
-        size_t count = 0;
-        vnode_t* children[128];
-        node->ops.read_dir(children, &count, node);
+        vnode_t* children;
+        int count = node->read_dir(&children);
+        if (count < 0) return;
 
         for (size_t i = 0; i < count; i++) {
             bool last_child = (i == count - 1);
-            _print_tree(children[i], depth + 1, last_child, new_prefix);
+            if (strcmp("..", children->name) != 0 && strcmp(".", children->name) != 0 )
+                _print_tree(children, depth + 1, last_child, new_prefix);
+            vnode_t* prev = children;
+            children = children->next;
+            if (prev->is_static == false) delete prev;
         }
     }
 
     char* get_full_path_name(vnode_t* node){
-        vnode_t* root = get_root_node();
-        if (node == nullptr || node == root) return "/"; // root directory
-        char* name = new char[strlen(node->name) + 2];
-        name[0] = '/';
-        name[1] = '\0';
-        strcat(name, node->name); //'/app' -> '/to/app' -> '/path/to/app'
-        
-        vnode_t* pnode = node->parent;
-        while(pnode != nullptr && pnode != root){
-            char* old_name = name;
-            name = new char[strlen(old_name) + strlen(pnode->name) + 2]; // +2, one for the '/' and one for the '\0'
-            name[0] = '/';
-            name[1] = '\0'; // null terminate it for strcat to work properly (just in case)
-            strcat(name, pnode->name);
-            strcat(name, old_name);
-            pnode = pnode->parent;
-
-            delete[] old_name;
-        }
-        return name;
+        return node->pathname;
     }
 }

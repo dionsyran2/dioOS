@@ -2,19 +2,21 @@ OSNAME = dioOS
 OSDIR := $(dir $(abspath $(firstword $(MAKEFILE_LIST))))
 DISK := $(OSDIR)/$(OSNAME).img
 BOOTDIR := $(OSDIR)/bootloader
-BOOTEFI := $(BOOTDIR)/BOOTX64.EFI
 KERNELDIR := $(OSDIR)/kernel
 BUILDDIR := $(KERNELDIR)/bin
 DISKDIR := $(OSDIR)/disk
 APPDIR := $(OSDIR)/applications
 APPBINDIR := $(APPDIR)/bin
-DISK_SIZE_MB=2048
+DISK_SIZE_MB=4096
 ESP_SIZE_MB=64
 
-GRUB_VERSION := 2.06
-GRUB_TARBALL := grub-$(GRUB_VERSION).tar.gz
-GRUB_URL := https://ftp.gnu.org/gnu/grub/$(GRUB_TARBALL)
-GRUB_DIR := grub-$(GRUB_VERSION)
+LIMINE_VERSION := 9.5.1
+LIMINE_TARBALL := limine-$(LIMINE_VERSION).tar.gz
+LIMINE_DIR := limine-$(LIMINE_VERSION)
+LIMINE_URL := https://github.com/limine-bootloader/limine/releases/download/v$(LIMINE_VERSION)/$(LIMINE_TARBALL)
+BOOTEFI := $(BOOTDIR)/$(LIMINE_DIR)/bin/BOOTX64.EFI
+
+KERNEL_FONT_FILE := $(DISKDIR)/fonts/vga16.psf
 
 .SILENT: all
 all:
@@ -57,15 +59,15 @@ buildimg:
 	echo "Installing EFI boot files..."; \
 	sudo mkdir -p mnt/esp/EFI/BOOT; \
 	sudo mkdir -p mnt/esp/boot; \
-	sudo mkdir -p mnt/esp/boot/grub; \
+	sudo mkdir -p mnt/esp/boot/limine; \
 	sudo cp $(BOOTEFI) mnt/esp/EFI/BOOT; \
 	sudo cp $(OSDIR)/startup.nsh mnt/esp/ || echo "Missing startup.nsh"; \
-	sudo cp $(OSDIR)/grub.cfg mnt/esp/boot/grub; \
+	sudo cp $(OSDIR)/limine.conf mnt/esp/boot/limine; \
+	[ -f $(BUILDDIR)/kernel.elf ] && sudo cp $(BUILDDIR)/kernel.elf mnt/esp/boot/ || echo "Missing kernel.elf"; \
+	[ -f $(KERNEL_FONT_FILE) ] && sudo cp $(KERNEL_FONT_FILE) mnt/esp/ || echo "Missing kernel font file!"; \
 	\
 	echo "Installing OS files..."; \
-	sudo mkdir -p mnt/ext2/boot; \
 	sudo mkdir mnt/ext2/applications; \
-	[ -f $(BUILDDIR)/kernel.elf ] && sudo cp $(BUILDDIR)/kernel.elf mnt/ext2/boot/ || echo "Missing kernel.elf"; \
 	[ -d $(DISKDIR) ] && sudo cp -r $(DISKDIR)/* mnt/ext2/ || echo "Missing $(DISKDIR)"; \
 	[ -d $(APPBINDIR) ] && sudo cp -r $(APPBINDIR)/* mnt/ext2/applications/ || echo "Missing $(APPBINDIR)"; \
 	\
@@ -88,29 +90,23 @@ setup:
 		mkdir -p $(BOOTDIR); \
 	fi
 	
-	@if [ ! -f $(BOOTDIR)/$(GRUB_TARBALL) ]; then \
-		echo "Downloading GRUB source..."; \
-		wget -P $(BOOTDIR) $(GRUB_URL); \
+	@if [ ! -f $(BOOTDIR)/$(LIMINE_TARBALL) ]; then \
+		echo "Downloading LIMINE source..."; \
+		wget -P $(BOOTDIR) $(LIMINE_URL); \
 	fi
 
-	@if [ ! -d $(BOOTDIR)/$(GRUB_DIR) ]; then \
-		echo "Extracting GRUB..."; \
-		tar -C $(BOOTDIR) -xf $(BOOTDIR)/$(GRUB_TARBALL); \
+	@if [ ! -d $(BOOTDIR)/$(LIMINE_DIR) ]; then \
+		echo "Extracting LIMINE..."; \
+		tar -C $(BOOTDIR) -xf $(BOOTDIR)/$(LIMINE_TARBALL); \
 	fi
-
-	cd $(BOOTDIR)/$(GRUB_DIR); \
-	./bootstrap; \
-	mkdir -p build; \
-	cd build; \
-	../configure --target=x86_64 --with-platform=efi --disable-werror; \
-	make -j$(nproc); \
-	./grub-mkstandalone -O x86_64-efi --directory=./grub-core -o $(BOOTEFI) --modules="part_gpt part_msdos ext2 fat normal efi_gop efi_uga chain configfile linux" "boot/grub/grub.cfg=$(BOOTDIR)/grub.cfg"
+	cd $(BOOTDIR)/$(LIMINE_DIR); ./bootstrap; ./configure --enable-uefi-x86-64; make;
+	
 
 
 clean:
 	@$(MAKE) -C $(KERNELDIR) clean
 
 cleanall:
-	rm -rf $(BOOTDIR)/$(GRUB_DIR)
-	rm -rf $(BOOTDIR)/$(GRUB_TARBALL)
+	rm -rf $(BOOTDIR)/$(LIMINE_DIR)
+	rm -rf $(BOOTDIR)/$(LIMINE_TARBALL)
 	@$(MAKE) clean

@@ -12,8 +12,6 @@
 
 #define TASK_SCHEDULER_COUNTER_DEFAULT              2              // The larger the quantum, the "laggier" the user experience - quanta above 100ms should be avoided.
 #define TASK_SCHEDULER_DEFAULT_STACK_SIZE           4 * 1024 * 1024 // 4MB
-#define TASK_SCHEDULER_DEFAULT_STACK_LOCATION       0xFFFF820000000000
-#define TASK_SCHEDULER_DEFAULT_KSTACK_LOCATION      0xFFFF830000000000
 
 
 #define TASK_SCHEDULER_DEFAULT_STACK_SIZE_IN_PAGES  \
@@ -27,8 +25,8 @@ typedef struct {
 
 
 
-#define BRK_DEFAULT_BASE 0xFFFF890000000000
-#define RMAP_DEFAULT_BASE 0xFFFF850000000000
+#define BRK_DEFAULT_BASE 0x7F0000000000
+#define RMAP_DEFAULT_BASE 0x7FF000000000
 #define PUSH_TO_STACK(rsp, type, value)                                                 \
   rsp -= sizeof(type);                                                              \
   *((type *)(rsp)) = value
@@ -168,6 +166,7 @@ struct open_fd_t {
 
 namespace task_scheduler{
     extern bool disable_scheduling;
+    extern size_t num_of_tasks;
     
     task_t* get_current_task();
 

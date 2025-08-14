@@ -3,7 +3,6 @@
 
 
 volatile uint32_t* io_apic;
-uint64_t LAPICAddress;
 uint64_t APICticsSinceBoot = 0;
 uint64_t Ticks = 0;
 
@@ -55,12 +54,16 @@ uint64_t to_unix_timestamp(RTC::rtc_time_t* time){
 }
 RTC::rtc_time_t time;
 RTC::rtc_time_t* c_time = nullptr;
+uint64_t uptime;
+
 void update_time(){
+    if ((Ticks % 1000) == 0) uptime++;
+    
     if (c_time == nullptr) {
         c_time = &time; // pretend you never saw that
         RTC::rtc_time_t rtc_time = RTC::read_rtc_time();
         memcpy(c_time, &rtc_time, sizeof(RTC::rtc_time_t));
-    } 
+    }
     c_time->msec++;
     if (c_time->msec >= 1000){
         c_time->msec = 0;
@@ -102,12 +105,12 @@ uint32_t IOApicRead(uint8_t reg){
     return io_apic[IOWIN / sizeof(uint32_t)];
 }
 static inline void write_apic_register(uint32_t offset, uint32_t value) {
-    volatile uint32_t* apic_base = (volatile uint32_t*)(read_msr(IA32_APIC_BASE) & ~0xFFF);
+    volatile uint32_t* apic_base = (volatile uint32_t*)(physical_to_virtual(read_msr(IA32_APIC_BASE) & ~0xFFF));
     apic_base[offset / 4] = value;
 }
 
 static inline uint32_t read_apic_register(uint32_t offset) {
-    volatile uint32_t* apic_base = (volatile uint32_t*)(read_msr(IA32_APIC_BASE) & ~0xFFF);
+    volatile uint32_t* apic_base = (volatile uint32_t*)(physical_to_virtual(read_msr(IA32_APIC_BASE) & ~0xFFF));
     return apic_base[offset / 4];
 }
 
@@ -155,11 +158,11 @@ int IRQtoGSI(int irq){
 void InitIOAPIC(){
     void* entryAddress = (void*)madt->FindIOApic();
     IOAPIC* IOApic = (IOAPIC*)((uint64_t)entryAddress + sizeof(Entry));
-    uint32_t apicAddress = IOApic->APICAddress; // See specifications or link in apic.h
-    //kprintf("APIC GSI: %d\n", IOApic->GSIBase);
-    globalPTM.MapMemory((void*)apicAddress, (void*)apicAddress);
+    uint64_t physical_address = IOApic->APICAddress; // See specifications or link in apic.h
+    uint64_t virtual_address = physical_to_virtual(physical_address);
+    globalPTM.MapMemory((void*)virtual_address, (void*)physical_address);
 
-    io_apic = (uint32_t*)apicAddress;
+    io_apic = (uint32_t*)virtual_address;
 
     uint32_t version = IOApicRead(0x01);
     uint8_t ioApicVersion = version & 0xFF;
@@ -174,10 +177,10 @@ void InitLAPIC() {
     outb(PIC1_DATA, 0xFF);
     outb(PIC2_DATA, 0xFF);
     
-    uint32_t* apic_base = (uint32_t*)(read_msr(IA32_APIC_BASE) & ~0xFFF);
-    LAPICAddress = (uint64_t)apic_base;
-    //kprintf("APIC ADDR %llx\n", (uint64_t)apic_base);
-    globalPTM.MapMemory((void*)apic_base, (void*)apic_base);
+    uint64_t physical_address = (read_msr(IA32_APIC_BASE) & ~0xFFF);
+    uint64_t virtual_address = physical_to_virtual(physical_address);
+    globalPTM.MapMemory((void*)virtual_address, (void*)physical_address);
+
     write_apic_register(0xF0, 0xFF | (1 << 8));
     write_apic_register(0x80, 0x00);
     write_apic_register(0xE0, 0xffffffff);

@@ -317,12 +317,12 @@ struct snd_ctl_elem_info {
 };
 
 struct snd_ctl_elem_list {
-	unsigned int offset;
-	unsigned int space;
-	unsigned int used;		/* R: count of element IDs set */
-	unsigned int count;		/* R: count of all elements */
-	struct snd_ctl_elem_id *pids; /* R: IDs */
-	unsigned char reserved[50];
+    unsigned int offset;    // [in] First control index to list
+    unsigned int space;     // [in] Max number of IDs user wants
+    unsigned int used;      // [out] Number of actual IDs returned
+    unsigned int count;     // [out] Total number of controls available
+    struct snd_ctl_elem_id *pids; // [out] Array of element IDs
+    unsigned char reserved[50];
 };
 /********************************************************************************/
 #define	SNDRV_PCM_ACCESS_RW_INTERLEAVED		3
@@ -522,8 +522,3 @@ struct HDA{
     void QueueSample(void* sample);
     void hwparams(snd_pcm_hw_params* params);
 };
-
-
-extern void* TestSong;
-extern uint8_t numOfHDAInstances;
-extern HDA* hdaInstances[10];

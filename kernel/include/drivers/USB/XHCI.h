@@ -103,6 +103,6 @@ namespace drivers{
 
         bool _has_int();
 
-        xhci_command_completion_trb_t* _send_command_trb(xhci_trb_t* cmd_trb, uint32_t timeout_ms = 200);
+        xhci_command_completion_trb_t* _send_command_trb(xhci_trb_t* cmd_trb, uint32_t timeout_ms = 250);
     };
 }

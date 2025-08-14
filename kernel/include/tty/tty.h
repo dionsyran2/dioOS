@@ -12,7 +12,7 @@ namespace tty{
     typedef uint32_t Color;
     typedef uint8_t Attributes;
     typedef struct{
-        char ch;
+        wchar_t ch;
         Color fg;
         Color bg;
         bool  is_usr;
@@ -48,6 +48,8 @@ namespace tty{
         vnode_t* in_pipe; // lets use pipes to buffer input and output... should in theory be faster
         vnode_t* out_pipe; // lets use pipes to buffer input and output... should in theory be faster
         
+        void* buffer;
+        uint64_t buffer_size;
         // keep track of whether a newline character has been entered by the user (enter key, in canonical mode)
         bool newline_entered;
 
@@ -55,9 +57,9 @@ namespace tty{
 
         void draw_screen();
         void draw_cell(uint32_t row, uint32_t col);
-        void set_chr(uint32_t row, uint32_t col, Color fb, Color bg, char chr, uint32_t attrs);
+        void set_chr(uint32_t row, uint32_t col, Color fb, Color bg, wchar_t chr, uint32_t attrs);
         cell_t* get_cell(uint32_t row, uint32_t col);
-        void write_chr(char chr);
+        void write_chr(wchar_t chr);
         void print(const char* str, uint32_t length);
         void clear();
         void clear(uint32_t start[2], uint32_t end[2]);

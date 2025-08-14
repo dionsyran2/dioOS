@@ -308,7 +308,6 @@ extern "C" int sys_clone_child_entry(){
     asm ("cli");
 
     task_t* ctask = task_scheduler::get_current_task();
-    user_syscall_stack = ctask->rsi;
 
     __asm__ __volatile__("mov %0, %%rsp" :: "r" (ctask->rdx));
     __asm__ __volatile__("mov %0, %%rbp" :: "r" (ctask->rdi));
@@ -347,7 +346,6 @@ int sys_clone(unsigned long flags, void *stack, int *parent_tid, int *child_tid,
 
     task_t* ctask = task_scheduler::get_current_task();
     task_t* child = task_scheduler::fork_process(ctask, (function)sys_clone_child_entry);
-
     if (flags & CLONE_PARENT_SETTID) *parent_tid = child->tid;
     if (flags & CLONE_CHILD_SETTID) *child_tid = child->tid;
 
@@ -355,7 +353,7 @@ int sys_clone(unsigned long flags, void *stack, int *parent_tid, int *child_tid,
     child->rsp = (uint64_t)GlobalAllocator.RequestPage() + 0x1000;
     child->rdx = rsp;
     child->rdi = rbp;
-    child->rsi = user_syscall_stack;
+    child->current_user_stack_ptr = (uint64_t)stack != 0 ? (uint64_t)stack : user_syscall_stack;
     task_scheduler::mark_ready(child);
     ctask->counter = TASK_SCHEDULER_COUNTER_DEFAULT;
     return child->pid;
@@ -366,6 +364,7 @@ static const int FUTEX_HASHTABLE_SIZE = 256;
 struct futex_waiter {
     task_t* task;
     futex_waiter* next;
+    uint32_t bitset;
 };
 
 struct futex_queue {
@@ -382,7 +381,7 @@ static inline uint32_t futex_hash(uint32_t* uaddr) {
     return (((uintptr_t)uaddr) >> 2) % FUTEX_HASHTABLE_SIZE;
 }
 
-int sys_futex(uint32_t *uaddr, int futex_op, uint32_t val, const struct timespc *timeout) {
+int sys_futex(uint32_t *uaddr, int futex_op, uint32_t val, const struct timespc *timeout, uint32_t *uaddr2, uint32_t val3) {
     int cmd = futex_op & FUTEX_CMD_MASK;
     bool is_private = futex_op & FUTEX_PRIVATE_FLAG;
     uint32_t h = futex_hash(uaddr);
@@ -434,6 +433,57 @@ int sys_futex(uint32_t *uaddr, int futex_op, uint32_t val, const struct timespc 
         spin_unlock(&q.lock);
         return woken;
     }
+
+    case FUTEX_WAIT_BITSET: {
+        if (*uaddr != val) return -EAGAIN;
+
+        spin_lock(&q.lock);
+        futex_waiter waiter{ task_scheduler::get_current_task(), q.head, val3 };
+        q.head = &waiter;
+        spin_unlock(&q.lock);
+
+        task_t* self = task_scheduler::get_current_task();
+        if (timeout) {
+            uint64_t deadline = APICticsSinceBoot +
+                timeout->tv_sec * 1000 +
+                timeout->tv_nsec / (1000000000 / 1000);
+            task_scheduler::schedule_until(deadline, task_state_t::BLOCKED);
+
+            spin_lock(&q.lock);
+            futex_waiter** ptr = &q.head;
+            while (*ptr) {
+                if ((*ptr)->task == self) {
+                    *ptr = (*ptr)->next;
+                    break;
+                }
+                ptr = &(*ptr)->next;
+            }
+            spin_unlock(&q.lock);
+
+            if (APICticsSinceBoot >= deadline) return -ETIMEDOUT;
+        } else {
+            task_scheduler::yield();
+        }
+        return 0;
+    }
+    case FUTEX_WAKE_BITSET: {
+        int woken = 0;
+        spin_lock(&q.lock);
+        futex_waiter** ptr = &q.head;
+        while (*ptr && woken < (int)val) {
+            if ((*ptr)->bitset & val3) {
+                futex_waiter* w = *ptr;
+                *ptr = (*ptr)->next;
+                task_scheduler::unblock(w->task);
+                woken++;
+            } else {
+                ptr = &(*ptr)->next;
+            }
+        }
+        spin_unlock(&q.lock);
+        return woken;
+    }
+
 
     default:
         return -ENOSYS;

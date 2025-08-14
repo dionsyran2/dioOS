@@ -69,11 +69,12 @@ namespace AHCI {
             PortType portType;
             uint8_t* buffer;
             uint8_t portNumber;
+            uint64_t total_sectors;
             void Configure();
             void StartCMD();
             void StopCMD();
             bool Read(uint64_t sector, uint32_t sectorCount, void* buffer);//sectorcount: amount of sectors to read
-            bool Write(uint64_t sector, uint32_t sectorCount, const void* buffer);//sectorcount: amount of sectors to read
+            bool Write(uint64_t sector, uint32_t sectorCount, const void* buffer);//sectorcount: amount of sectors to write
             bool IdentifyDevice(uint16_t* outBuffer512);
     }__attribute__((packed));
     

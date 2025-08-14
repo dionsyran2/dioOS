@@ -7,14 +7,18 @@
 #include <paging/PageTableManager.h>
 #include <scheduling/apic/apic.h>
 #include <scheduling/task/scheduler.h>
+#include <scheduling/lock/spinlock.h>
+
 
 extern "C" uacpi_status uacpi_kernel_get_rsdp(uacpi_phys_addr *out_rsdp_address){
-    *out_rsdp_address = (uacpi_phys_addr)rsdp;
+    *out_rsdp_address = (uacpi_phys_addr)virtual_to_physical((uint64_t)rsdp);
     return UACPI_STATUS_OK;
 }
 
 extern "C" void *uacpi_kernel_map(uacpi_phys_addr addr, uacpi_size len){
-    return (void*)addr;
+    void* vaddr = (void*)physical_to_virtual(addr);
+    if (!globalPTM.isMapped(vaddr)) globalPTM.MapMemory(vaddr, (void*)addr);
+    return vaddr;
 }
 
 extern "C" void uacpi_kernel_unmap(void *addr, uacpi_size len){
@@ -88,11 +92,14 @@ extern "C" uacpi_status uacpi_kernel_pci_device_open(uacpi_pci_address address, 
 
     ACPI::DeviceConfig* seg = (ACPI::DeviceConfig*)((uint64_t)mcfg + sizeof(ACPI::MCFGHeader) + (sizeof(ACPI::DeviceConfig) * address.segment));
 
-    addr = seg->BaseAddress;
+    addr = physical_to_virtual(seg->BaseAddress);
+    if (!globalPTM.isMapped((void*)addr)) globalPTM.MapMemory((void*)addr, (void*)seg->BaseAddress);
 
     uint64_t offset = (address.bus << 20) + (address.device << 15) + (address.function << 12);
     addr += offset;
-    globalPTM.MapMemory((void*)addr, (void*)addr);
+    
+    if (!globalPTM.isMapped((void*)(addr & ~0xFFFUL))) globalPTM.MapMemory((void*)(addr & ~0xFFFUL), 
+                                                                            (void*)(seg->BaseAddress + ((offset & ~0xFFFUL))));
 
     *out_handle = (uacpi_handle)addr;
 
@@ -199,7 +206,7 @@ extern "C" void uacpi_kernel_free(void *mem){
 }
 
 extern "C" uacpi_u64 uacpi_kernel_get_nanoseconds_since_boot(void){
-    return APICticsSinceBoot * 1000 * 1000;
+    return APICticsSinceBoot * 1000;
 }
 
 extern "C" void uacpi_kernel_stall(uacpi_u8 usec){
@@ -278,26 +285,37 @@ extern "C" uacpi_status uacpi_kernel_uninstall_interrupt_handler(uacpi_interrupt
     return UACPI_STATUS_OK;
 }
 
+
 extern "C" uacpi_handle uacpi_kernel_create_spinlock(void){
-    return (uacpi_handle)10;
+    return (uacpi_handle)(new spinlock_t);
 }
 
-extern "C" void uacpi_kernel_free_spinlock(uacpi_handle){
-
+extern "C" void uacpi_kernel_free_spinlock(uacpi_handle handle){
+    spin_unlock((spinlock_t*)handle);
+    delete (spinlock_t*)handle;
 }
 
-uacpi_cpu_flags uacpi_kernel_lock_spinlock(uacpi_handle){
-    return (uacpi_cpu_flags)4;
+uacpi_cpu_flags uacpi_kernel_lock_spinlock(uacpi_handle handle){
+    spin_lock((spinlock_t*)handle);
+    return 0;
 }
 
-void uacpi_kernel_unlock_spinlock(uacpi_handle, uacpi_cpu_flags){
-
+void uacpi_kernel_unlock_spinlock(uacpi_handle handle, uacpi_cpu_flags){
+    spin_unlock((spinlock_t*)handle);
 }
 
-uacpi_status uacpi_kernel_schedule_work(uacpi_work_type, uacpi_work_handler, uacpi_handle ctx){
+task_t* worker = nullptr;
+uacpi_status uacpi_kernel_schedule_work(uacpi_work_type type, uacpi_work_handler entry, uacpi_handle ctx){
+    worker = task_scheduler::create_process("UACPI WORKER", (function)entry);
+    worker->rdi = (uint64_t)ctx;
+    task_scheduler::mark_ready(worker);
     return UACPI_STATUS_OK;
 }
 
 uacpi_status uacpi_kernel_wait_for_work_completion(void){
+    if (worker == nullptr) return UACPI_STATUS_OK;
+    while(worker->state != ZOMBIE) asm ("pause");
+    task_scheduler::remove_task(worker);
+    worker = nullptr;
     return UACPI_STATUS_OK;
 }

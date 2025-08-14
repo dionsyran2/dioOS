@@ -1,6 +1,7 @@
 #include <memory/dma.h>
 #include <ArrayList.h>
 #include <memory/heap.h>
+#include <paging/PageTableManager.h>
 
 struct dma_allocation{
     uint64_t physical_address;
@@ -32,7 +33,7 @@ void* dma_alloc(size_t size, size_t alignment, size_t boundary){
 }
 
 uint64_t dma_phys_addr(void* vaddr){
-    return (uint64_t)vaddr;
+    return (uint64_t)globalPTM.getPhysicalAddress(vaddr);
 }
 
 void dma_free(void* addr){

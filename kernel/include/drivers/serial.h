@@ -1,6 +1,6 @@
 #pragma once
-#include <IO.h>
 #include <stdarg.h>
+#include <IO.h>
 
 #define COM1 0x3F8
 

@@ -147,24 +147,24 @@ namespace AHCI{
         StopCMD();
 
         void* newBase = GlobalAllocator.RequestPage();
-        hbaPort->commandListBase = (uint32_t)(uint64_t)newBase;
-        hbaPort->commandListBaseUpper = (uint32_t)((uint64_t)newBase >> 32);
+        hbaPort->commandListBase = (uint32_t)virtual_to_physical((uint64_t)newBase);
+        hbaPort->commandListBaseUpper = (uint32_t)(virtual_to_physical((uint64_t)newBase) >> 32);
 
-        memset((void*)hbaPort->commandListBase, 0, 1024);
+        memset((void*)newBase, 0, 1024);
 
         void* fisBase = GlobalAllocator.RequestPage();
-        hbaPort->fisBaseAddress = (uint32_t)(uint64_t)fisBase;
-        hbaPort->fisBaseAddressUpper = (uint32_t)((uint64_t)fisBase >> 32);
+        hbaPort->fisBaseAddress = (uint32_t)virtual_to_physical((uint64_t)fisBase);
+        hbaPort->fisBaseAddressUpper = (uint32_t)(virtual_to_physical((uint64_t)fisBase) >> 32);
 
         memset(fisBase, 0, 256);
 
-        HBACommandHeader* cmdHeader = (HBACommandHeader*)((uint64_t)hbaPort->commandListBase + ((uint64_t)hbaPort->commandListBaseUpper << 32));
+        HBACommandHeader* cmdHeader = (HBACommandHeader*)(physical_to_virtual((uint64_t)hbaPort->commandListBase | ((uint64_t)hbaPort->commandListBaseUpper << 32)));
 
         for (int i = 0; i < 32; i++){
             cmdHeader[i].prdtLength = 8;
 
             void* cmdTableAddress = GlobalAllocator.RequestPage();
-            uint64_t address = (uint64_t)cmdTableAddress + (i << 8);
+            uint64_t address = virtual_to_physical((uint64_t)cmdTableAddress + (i << 8));
             cmdHeader[i].commandTableBaseAddress = (uint32_t)address;
             cmdHeader[i].commandTableBaseAddressUpper = (uint32_t)((uint64_t)address >> 32);
             memset(cmdTableAddress, 0, 256);
@@ -192,78 +192,7 @@ namespace AHCI{
         hbaPort->cmdSts |= HBA_PxCMD_FRE;
         hbaPort->cmdSts |= HBA_PxCMD_ST;
     }
-    bool Port::Write(uint64_t sector, uint32_t sectorCount, const void* buffer) {
-        if (sectorCount > ((4 * 1024 * 1024) / 512)){
-            uint32_t SectorCnt = sectorCount;
-            uint32_t max_sectors = ((4 * 1024 * 1024) / 512);
-            uint32_t offset = 0;
-            while (SectorCnt){
-                uint32_t to_read = SectorCnt > max_sectors ? max_sectors : SectorCnt;
-                bool ret = Write(sector + offset, to_read, (uint8_t*)buffer + offset);
-                if (ret == false) return false;
-                offset += to_read * 512;
-                SectorCnt -= to_read;
-            }
-            return true;
-        }
-        uint16_t spin = 0;
-        while ((hbaPort->taskFileData & (ATA_DEV_BUSY | ATA_DEV_DRQ)) && spin < 1000000) {
-            spin++;
-        }
-
-        uint32_t sectorL = (uint32_t)sector;
-        uint32_t sectorH = (uint32_t)(sector >> 32);
-
-        hbaPort->interruptStatus = (uint32_t)-1;
-
-        HBACommandHeader* cmdHeader = (HBACommandHeader*)hbaPort->commandListBase;
-        cmdHeader->commandFISLength = sizeof(FIS_REG_H2D) / sizeof(uint32_t); // COMMAND FIS SIZE
-
-        cmdHeader->write = 1; // Set to 1 for Write
-        cmdHeader->prdtLength = 1;
-
-        HBACommandTable* commandTable = (HBACommandTable*)(cmdHeader->commandTableBaseAddress);
-        memset(commandTable, 0, sizeof(HBACommandTable) + (cmdHeader->prdtLength - 1) * sizeof(HBAPRDTEntry));
-
-        commandTable->prdtEntry[0].dataBaseAddress = (uint32_t)(uint64_t)buffer;
-        commandTable->prdtEntry[0].dataBaseAddressUpper = (uint32_t)((uint64_t)buffer >> 32);
-        commandTable->prdtEntry[0].byteCount = (sectorCount << 9) - 1; // 512 bytes per sector
-        commandTable->prdtEntry[0].interruptOnCompletion = 1; // Will interrupt on completion
-
-        FIS_REG_H2D* cmdFIS = (FIS_REG_H2D*)(&commandTable->commandFIS);
-
-        cmdFIS->fisType = FIS_TYPE_REG_H2D;
-        cmdFIS->commandControl = 1; // Is Command!
-        cmdFIS->command = ATA_CMD_WRITE_DMA_EX; // Use the write command
-
-        cmdFIS->lba0 = (uint8_t)sectorL;
-        cmdFIS->lba1 = (uint8_t)(sectorL >> 8);
-        cmdFIS->lba2 = (uint8_t)(sectorL >> 16);
-        cmdFIS->lba3 = (uint8_t)(sectorH);
-        cmdFIS->lba4 = (uint8_t)(sectorH >> 8);
-        cmdFIS->lba5 = (uint8_t)(sectorH >> 16); // Correct the indexing here
-
-        cmdFIS->deviceRegister = 1 << 6; // LBA Mode
-
-        cmdFIS->countLow = sectorCount & 0xFF;
-        cmdFIS->countHigh = (sectorCount >> 8) & 0xFF;
-
-        if (spin == 1000000) {
-            return false;
-        }
-
-        hbaPort->commandIssue = 1; // Issue the command
-
-        while (true) {
-            if (hbaPort->commandIssue == 0) break;
-
-            if (hbaPort->interruptStatus & HBA_PxIS_TFES) {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    
 
     bool Port::IdentifyDevice(uint16_t* outBuffer512) {
         // Wait for device to be ready
@@ -275,17 +204,18 @@ namespace AHCI{
 
         hbaPort->interruptStatus = (uint32_t)-1; // Clear interrupt status
 
-        HBACommandHeader* cmdHeader = (HBACommandHeader*)hbaPort->commandListBase;
+        HBACommandHeader* cmdHeader = (HBACommandHeader*)physical_to_virtual(hbaPort->commandListBase + ((uint64_t)hbaPort->commandListBaseUpper << 32));
         cmdHeader->commandFISLength = sizeof(FIS_REG_H2D) / sizeof(uint32_t);
         cmdHeader->write = 0;  // Read from device
         cmdHeader->prdtLength = 1;
 
-        HBACommandTable* cmdTable = (HBACommandTable*)(cmdHeader->commandTableBaseAddress);
+        HBACommandTable* cmdTable = (HBACommandTable*)(physical_to_virtual(cmdHeader->commandTableBaseAddress + ((uint64_t)cmdHeader->commandTableBaseAddressUpper << 32)));
         memset(cmdTable, 0, sizeof(HBACommandTable) + (cmdHeader->prdtLength - 1) * sizeof(HBAPRDTEntry));
 
         // Use your outBuffer512 as data buffer for PRDT
-        cmdTable->prdtEntry[0].dataBaseAddress = (uint32_t)(uint64_t)outBuffer512;
-        cmdTable->prdtEntry[0].dataBaseAddressUpper = (uint32_t)((uint64_t)outBuffer512 >> 32);
+        uint64_t physical_address = globalPTM.getPhysicalAddress((void*)((uint64_t)outBuffer512 & ~0xFFFUL)) + ((uint64_t)outBuffer512 & 0xFFF);
+        cmdTable->prdtEntry[0].dataBaseAddress = (uint32_t)physical_address;
+        cmdTable->prdtEntry[0].dataBaseAddressUpper = (uint32_t)(physical_address >> 32);
         cmdTable->prdtEntry[0].byteCount = SECTOR_SIZE - 1; // 512 bytes - 1
         cmdTable->prdtEntry[0].interruptOnCompletion = 1;
 
@@ -324,8 +254,149 @@ namespace AHCI{
         return -1;
     }
 
-    #define MAX_SECTORS_PER_REQ ((256 * 8 * 1024) / 512)
+    #define MAX_SECTORS_PER_REQ ((256 * 1024) / 512)
+
+    bool Port::Write(uint64_t Sector, uint32_t SectorCount, const void* buffer) {
+        if (((uint64_t)Sector + SectorCount) > total_sectors){
+            serialf("\e[0;31m[AHCI]\e[0m Tried to write to an area thats out of bounds (Sectors %d-%d) (MB %d-%d) total sectors: %d\n",
+                    Sector, (uint64_t)Sector + SectorCount, (((uint64_t)Sector * 512) / 1024) / 1024, ((((uint64_t)Sector + SectorCount) * 512) / 1024) / 1024, total_sectors);
+            return false;
+        }
+        void* Buffer = (void*)buffer;
+        if (SectorCount > MAX_SECTORS_PER_REQ){
+            while (SectorCount > 0){
+                uint32_t to_read = MAX_SECTORS_PER_REQ;
+                if (SectorCount < to_read) to_read = SectorCount;
+                bool ret = Write(Sector, to_read, Buffer);
+                Sector += to_read;
+                SectorCount -= to_read;
+                Buffer = (void*)((uint64_t)Buffer + (to_read * 512));
+                if (!ret) return false;
+            }
+            return true;
+        }
+        
+        hbaPort->interruptStatus = (uint32_t)-1;
+        int spin = 0;
+        int slot = find_cmdslot(this);
+        if (slot == -1) return false;
+
+        HBACommandHeader* CommandHeader = (HBACommandHeader*)physical_to_virtual(hbaPort->commandListBase | ((uint64_t)hbaPort->commandListBaseUpper << 32));
+        CommandHeader += slot;
+        CommandHeader->commandFISLength = sizeof(FIS_REG_H2D)/ sizeof(uint32_t); //command FIS size;
+        CommandHeader->write = 1; // this is a write command
+        CommandHeader->prdtLength = (uint16_t)((SectorCount-1) >> 4) + 1;
+
+        HBACommandTable* CommandTable = (HBACommandTable*)(physical_to_virtual(CommandHeader->commandTableBaseAddress | ((uint64_t)CommandHeader->commandTableBaseAddressUpper << 32)));
+        memset(CommandTable, 0, 0x1000);
+
+        FIS_REG_H2D* CommandFIS = (FIS_REG_H2D*)(&CommandTable->commandFIS);
+        
+        CommandFIS->countLow = SectorCount & 0xFF;
+        CommandFIS->countHigh = (SectorCount >> 8) & 0xFF;
+
+        uint64_t sectors = SectorCount;
+        uint64_t buff = (uint64_t)virtual_to_physical((uint64_t)Buffer);
+
+        // 8K bytes (16 sectors) per PRDT
+        for (int i=0; i<CommandHeader->prdtLength; i++)
+        {
+            if (SectorCount == 0) break;
+            uint32_t to_read = (sectors < 16) ? sectors : 16;
+
+            CommandTable->prdtEntry[i].dataBaseAddress = (uint32_t)((uint64_t)buff & 0xFFFFFFFF);
+            CommandTable->prdtEntry[i].dataBaseAddressUpper = (uint32_t)((uint64_t)buff >> 32);
+
+            CommandTable->prdtEntry[i].byteCount = (to_read * 512) - 1;
+            CommandTable->prdtEntry[i].interruptOnCompletion = 0;
+            buff += to_read * 512;
+            sectors -= to_read;	// 16 sectors
+        }
+        CommandTable->prdtEntry[CommandHeader->prdtLength - 1].interruptOnCompletion = 1;
+
+        CommandFIS->fisType = FIS_TYPE_REG_H2D;
+        CommandFIS->commandControl = 1; // command
+        CommandFIS->command = ATA_CMD_WRITE_DMA_EX;
+
+        uint32_t SectorL = (uint32_t)Sector;
+        uint32_t SectorH = (uint32_t)(Sector >> 32);
+
+        CommandFIS->lba0 = (uint8_t)SectorL;
+        CommandFIS->lba1 = (uint8_t)(SectorL >> 8);
+        CommandFIS->lba2 = (uint8_t)(SectorL >> 16);
+        CommandFIS->lba3 = (uint8_t)(SectorL >> 24);
+        CommandFIS->lba4 = (uint8_t)SectorH;
+        CommandFIS->lba5 = (uint8_t)(SectorH >> 8) & 0x0F; // Only lower 4 bits needed
+
+
+        CommandFIS->deviceRegister = 1 << 6; // LBA mode
+        while ((hbaPort->taskFileData & (ATA_DEV_BUSY | ATA_DEV_DRQ)) && spin < 1000000)
+        {
+            spin++;
+        }
+
+        if (spin == 1000000)
+        {
+            serialf("\e[0;35m[AHCI] Port is hung\e[0m\n");
+            return false;
+        }
+
+        hbaPort->commandIssue = 1 << slot;
+        spin = 0;
+        asm ("sti");
+        while (spin < 100){
+            Sleep(1);
+            spin++;
+            if((hbaPort->commandIssue == 0)) break;
+            if(hbaPort->interruptStatus & HBA_PxIS_TFES)
+            {
+                return false;
+            }
+        }
+
+        if (spin == 100){
+            serialf("\e[0;35m[AHCI] Could not issue command (Timed out).\e[0m\n");
+        }
+
+        spin = 0;
+        // Wait for completion
+        while (spin < 100)
+        {
+            Sleep(1);
+            spin++;
+            // In some longer duration reads, it may be helpful to spin on the DPS bit 
+            // in the PxIS port field as well (1 << 5)
+            if ((hbaPort->commandIssue & (1 << slot)) == 0) 
+                break;
+            if (hbaPort->interruptStatus & HBA_PxIS_TFES)	// Task file error
+            {
+                serialf("\e[0;35m[AHCI] Disk read error (Task file error)\e[0m\n");
+                return false;
+            }
+        }
+        
+        if (spin == 100){
+            serialf("\e[0;35m[AHCI] Disk read error (Timed out).\e[0m\n");
+        }
+
+        // Check again
+        if (hbaPort->interruptStatus & HBA_PxIS_TFES)
+        {
+            serialf("\e[0;35m[AHCI] Disk read error (Task file error)!\e[0m\n");
+            return false;
+        }
+
+        return true;
+    }
+
     bool Port::Read(uint64_t Sector, uint32_t SectorCount, void* Buffer){
+        uint64_t last_sector = Sector;
+        last_sector += SectorCount;
+        if (last_sector > total_sectors){
+            serialf("\e[0;31m[AHCI]\e[0m Tried to read an area thats out of bounds (Sectors %ll-%ll) (MB %ll-%ll) total sectors: %ll\n",
+                    Sector, last_sector, (((uint64_t)Sector * 512) / 1024) / 1024, ((last_sector * 512) / 1024) / 1024, total_sectors);
+            return false;
+        }
         if (SectorCount > MAX_SECTORS_PER_REQ){
             while (SectorCount > 0){
                 uint32_t to_read = MAX_SECTORS_PER_REQ;
@@ -344,35 +415,36 @@ namespace AHCI{
         int slot = find_cmdslot(this);
         if (slot == -1) return false;
 
-        HBACommandHeader* CommandHeader = (HBACommandHeader*)hbaPort->commandListBase;
+        HBACommandHeader* CommandHeader = (HBACommandHeader*)physical_to_virtual(hbaPort->commandListBase | ((uint64_t)hbaPort->commandListBaseUpper << 32));
         CommandHeader += slot;
         CommandHeader->commandFISLength = sizeof(FIS_REG_H2D)/ sizeof(uint32_t); //command FIS size;
         CommandHeader->write = 0; // this is a read command
         CommandHeader->prdtLength = (uint16_t)((SectorCount-1) >> 4) + 1;
 
-        HBACommandTable* CommandTable = (HBACommandTable*)(CommandHeader->commandTableBaseAddress);
-        memset(CommandTable, 0, sizeof(HBACommandTable) + ((CommandHeader->prdtLength-1) * sizeof(HBAPRDTEntry)));
+        HBACommandTable* CommandTable = (HBACommandTable*)(physical_to_virtual(CommandHeader->commandTableBaseAddress | ((uint64_t)CommandHeader->commandTableBaseAddressUpper << 32)));
+        memset(CommandTable, 0, 0x1000);
 
         FIS_REG_H2D* CommandFIS = (FIS_REG_H2D*)(&CommandTable->commandFIS);
         
         CommandFIS->countLow = SectorCount & 0xFF;
         CommandFIS->countHigh = (SectorCount >> 8) & 0xFF;
 
+        uint64_t sectors = SectorCount;
+        uint64_t buff = (uint64_t)virtual_to_physical((uint64_t)Buffer);
 
         // 8K bytes (16 sectors) per PRDT
         for (int i=0; i<CommandHeader->prdtLength; i++)
         {
-            uint8_t to_read = 16;
-            if (SectorCount < 16) to_read = SectorCount;
             if (SectorCount == 0) break;
+            uint32_t to_read = (sectors < 16) ? sectors : 16;
 
-            CommandTable->prdtEntry[i].dataBaseAddress = (uint32_t)((uint64_t)Buffer & 0xFFFFFFFF);
-            CommandTable->prdtEntry[i].dataBaseAddressUpper = (uint32_t)((uint64_t)Buffer >> 32);
+            CommandTable->prdtEntry[i].dataBaseAddress = (uint32_t)((uint64_t)buff & 0xFFFFFFFF);
+            CommandTable->prdtEntry[i].dataBaseAddressUpper = (uint32_t)((uint64_t)buff >> 32);
 
             CommandTable->prdtEntry[i].byteCount = (to_read * 512) - 1;
             CommandTable->prdtEntry[i].interruptOnCompletion = 0;
-            Buffer = (void*)((uint64_t)Buffer + (to_read * 512));
-            SectorCount -= to_read;	// 16 sectors
+            buff += to_read * 512;
+            sectors -= to_read;	// 16 sectors
         }
         CommandTable->prdtEntry[CommandHeader->prdtLength - 1].interruptOnCompletion = 1;
 
@@ -461,10 +533,12 @@ namespace AHCI{
     }
 
     bool AHCIDriver::init_device(){
-        ABAR = (HBAMemory*)((PCI::PCIHeader0*) PCIBaseAddress)->BAR5;
-
-        globalPTM.MapMemory(ABAR, ABAR);
-
+        uint64_t physical_address = ((PCI::PCIHeader0*) PCIBaseAddress)->BAR5;
+        uint64_t virtual_address = physical_to_virtual(physical_address);
+        GlobalAllocator.LockPage((void*)physical_address);
+        globalPTM.MapMemory((void*)virtual_address, (void*)physical_address);
+        ABAR = (HBAMemory*)virtual_address;
+        
         kprintf(0x00FF00, "[AHCI]");
         kprintf(" Driver instance initialized\n");
         return true;
@@ -524,7 +598,7 @@ namespace AHCI{
                     kprintf("Sector count: %ll ... Size: %ll MB\n", sectors, size_bytes / (1024 * 1024));
                     blk->block_count = sectors;
                     blk->block_size = SECTOR_SIZE;
-
+                    port->total_sectors = sectors;
 
                     char model[41];
                     SwapWordsToString(&identifyBuffer[27], 20, model);

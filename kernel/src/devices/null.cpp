@@ -3,13 +3,12 @@
 #include <VFS/vfs.h>
 #include <kerrno.h>
 
-int null_write(const char* txt, size_t length, vnode* this_node){
-    return length;
+int64_t null_write(const void* buffer, size_t cnt, size_t offset, vnode* this_node){
+    return cnt;
 }
 
-void* null_read(size_t* cnt, vnode* this_node){
-    *cnt = 0;
-    return nullptr;
+int64_t null_read(void* buffer, size_t cnt, size_t offset, vnode* this_node){
+    return 0;
 }
 
 

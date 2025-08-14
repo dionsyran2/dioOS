@@ -1,74 +1,60 @@
 #include <paging/PageFrameAllocator.h>
-#include <scheduling/lock/spinlock.h>
+#include <kernel.h>
 
 uint64_t freeMemory;
 uint64_t reservedMemory;
 uint64_t usedMemory;
 uint64_t memorySize;
-void* lowestFreeSeg = NULL;
+uint64_t lowestFreeSeg = NULL;
 size_t lowestFreeSegSize = 0; 
 bool Initialized = false;
 PageFrameAllocator GlobalAllocator;
 
-void PageFrameAllocator::ReadEFIMemoryMap(EFI_MEMORY_DESCRIPTOR* mMap, size_t mMapSize, size_t mMapDescSize){
+void PageFrameAllocator::ReadEFIMemoryMap(limine_memmap_response* mmap){
     if (Initialized) return;
-
     Initialized = true;
 
-    size_t mMapEntries = (mMapSize - sizeof(multiboot_tag_efi_mmap)) / mMapDescSize;
-
-    void* largestFreeMemSeg = NULL;
+    uint64_t largestFreeMemSeg = NULL;
     size_t largestFreeMemSegSize = 0;
-    void* secLargestFreeMemSeg = NULL;
-    size_t secLargestFreeMemSegSize = 0;
     
 
-    for (int i = 0; i < mMapEntries; i++){
-        EFI_MEMORY_DESCRIPTOR* desc = (EFI_MEMORY_DESCRIPTOR*)((uint64_t)mMap + (i * mMapDescSize));
-        if (desc->type == 7 && (uint64_t)desc->physAddr < 0x40000000){ // type = EfiConventionalMemory
-            if (lowestFreeSeg > desc->physAddr || lowestFreeSeg == NULL){
-                lowestFreeSeg = desc->physAddr;
-                lowestFreeSegSize = desc->numPages * 0x1000;
+    for (int i = 0; i < mmap->entry_count; i++){
+        limine_memmap_entry* desc = (limine_memmap_entry*)mmap->entries[i];
+        if (desc->type == LIMINE_MEMMAP_USABLE && (uint64_t)desc->base < 0x40000000){ // type = EfiConventionalMemory
+            if (lowestFreeSeg > desc->base || lowestFreeSeg == 0){
+                lowestFreeSeg = desc->base;
+                lowestFreeSegSize = desc->length;
             }
 
-            if (desc->numPages * 4096 > largestFreeMemSegSize)
+            if (desc->length > largestFreeMemSegSize)
             {
-                secLargestFreeMemSeg = largestFreeMemSeg;
-                secLargestFreeMemSegSize = largestFreeMemSegSize;
-                largestFreeMemSeg = desc->physAddr;
-                largestFreeMemSegSize = desc->numPages * 4096;
+                largestFreeMemSeg = desc->base;
+                largestFreeMemSegSize = desc->length;
             }
         }
-        /*if ((desc->type == 7 || desc->type == 3 || desc->type == 4 || desc->type == 1 || desc->type == 2) && (uint64_t)desc->physAddr < 0x40000000){
-            if (desc->physAddr < lowestMemLoc && ((uint64_t)desc->physAddr < 0x100000)){
-                lowestMemLoc = desc->physAddr;
-            }
-        }*/
     }
-    /*if (largestFreeMemSeg == lowestMemLoc){
-        largestFreeMemSeg = secLargestFreeMemSeg;
-        largestFreeMemSegSize = secLargestFreeMemSegSize;
-    }*/
+
 
     if (largestFreeMemSeg == lowestFreeSeg){
         largestFreeMemSeg += 0x1000;
     }
 
-    memorySize = GetMemorySize(mMap, mMapEntries, mMapDescSize);
+    memorySize = GetMemorySize(mmap);
     freeMemory = memorySize;
-    uint64_t bitmapSize = memorySize / 4096 / 8 + 1;
-    InitBitmap(bitmapSize, largestFreeMemSeg);
 
+    uint64_t bitmapSize = memorySize / 4096 / 8 + 1;
+    InitBitmap(bitmapSize, (void*)physical_to_virtual(largestFreeMemSeg));
+ 
     ReservePages(0, (memorySize / 0x1000) + 1);
-    for (int i = 0; i < mMapEntries; i++){
-        EFI_MEMORY_DESCRIPTOR* desc = (EFI_MEMORY_DESCRIPTOR*)((uint64_t)mMap + (i * mMapDescSize));
-        if (desc->type == 7){ // efiConventionalMemory
-            UnreservePages(desc->physAddr, desc->numPages);
+    for (int i = 0; i < mmap->entry_count; i++){
+        limine_memmap_entry* desc = (limine_memmap_entry*)mmap->entries[i];
+        if (desc->type == LIMINE_MEMMAP_USABLE){
+            UnreservePages((void*)desc->base, desc->length / 0x1000);
         }
     }
-    //ReservePages(0, 0x100); // reserve between 0 and 0x100000
-    LockPage(lowestFreeSeg);
-    LockPages(PageBitmap.Buffer, PageBitmap.Size / 4096 + 1);
+    ReservePages(0, 0x100); // reserve between 0 and 0x100000
+    ReservePage((void*)lowestFreeSeg);
+    LockPages(PageBitmap.Buffer, (PageBitmap.Size / 4096) + 1);
 }
 
 void PageFrameAllocator::InitBitmap(size_t bitmapSize, void* bufferAddress){
@@ -83,7 +69,7 @@ void* PageFrameAllocator::RequestPage(){
         if (PageBitmap[pageBitmapIndex] == true) continue;
         LockPage((void*)(pageBitmapIndex * 4096));
 
-        return (void*)(pageBitmapIndex * 4096);
+        return (void*)physical_to_virtual((pageBitmapIndex * 4096));
     }
 
     if (pageBitmapIndex == PageBitmap.Size * 8){
@@ -110,7 +96,7 @@ void* PageFrameAllocator::RequestPages(uint32_t pages){
             LockPage((void*)((pb + i) * 4096));
         }
 
-        return (void*)(pb * 4096);
+        return (void*)physical_to_virtual((pb * 4096));
     }
 
     return NULL; //Not enough consecutive pages
@@ -118,6 +104,7 @@ void* PageFrameAllocator::RequestPages(uint32_t pages){
 
 
 void PageFrameAllocator::FreePage(void* address){
+    if ((uint64_t)address >= MEMORY_BASE) address = (void*)virtual_to_physical((uint64_t)address); 
     uint64_t index = (uint64_t)address / 4096;
     if (PageBitmap[index] == false) return;
 
@@ -130,12 +117,14 @@ void PageFrameAllocator::FreePage(void* address){
 }
 
 void PageFrameAllocator::FreePages(void* address, uint64_t pageCount){
+    if ((uint64_t)address >= MEMORY_BASE) address = (void*)virtual_to_physical((uint64_t)address); 
     for (int t = 0; t < pageCount; t++){
         FreePage((void*)((uint64_t)address + (t * 4096)));
     }
 }
 
 void PageFrameAllocator::LockPage(void* address){
+    if ((uint64_t)address >= MEMORY_BASE) address = (void*)virtual_to_physical((uint64_t)address); 
     uint64_t index = (uint64_t)address / 4096;
     if (PageBitmap[index] == true) return;
     if (PageBitmap.Set(index, true)){
@@ -145,12 +134,14 @@ void PageFrameAllocator::LockPage(void* address){
 }
 
 void PageFrameAllocator::LockPages(void* address, uint64_t pageCount){
+    if ((uint64_t)address >= MEMORY_BASE) address = (void*)virtual_to_physical((uint64_t)address); 
     for (int t = 0; t < pageCount; t++){
         LockPage((void*)((uint64_t)address + (t * 4096)));
     }
 }
 
 void PageFrameAllocator::UnreservePage(void* address){
+    if ((uint64_t)address >= MEMORY_BASE) address = (void*)virtual_to_physical((uint64_t)address); 
     uint64_t index = (uint64_t)address / 4096;
     if (PageBitmap[index] == false) return;
     if (PageBitmap.Set(index, false)){
@@ -161,12 +152,14 @@ void PageFrameAllocator::UnreservePage(void* address){
 }
 
 void PageFrameAllocator::UnreservePages(void* address, uint64_t pageCount){
+    if ((uint64_t)address >= MEMORY_BASE) address = (void*)virtual_to_physical((uint64_t)address); 
     for (int t = 0; t < pageCount; t++){
         UnreservePage((void*)((uint64_t)address + (t * 4096)));
     }
 }
 
 void PageFrameAllocator::ReservePage(void* address){
+    if ((uint64_t)address >= MEMORY_BASE) address = (void*)virtual_to_physical((uint64_t)address); 
     uint64_t index = (uint64_t)address / 4096;
     if (PageBitmap[index] == true) return;
     if (PageBitmap.Set(index, true)){
@@ -176,19 +169,22 @@ void PageFrameAllocator::ReservePage(void* address){
 }
 
 void PageFrameAllocator::ReservePages(void* address, uint64_t pageCount){
+    if ((uint64_t)address >= MEMORY_BASE) address = (void*)virtual_to_physical((uint64_t)address); 
     for (int t = 0; t < pageCount; t++){
         ReservePage((void*)((uint64_t)address + (t * 4096)));
     }
 }
 
 void* PageFrameAllocator::GetPageAboveBase(uint64_t base){
+    if (base >= MEMORY_BASE) base = virtual_to_physical(base); 
+
     void* page = RequestPage();
     if ((uint64_t)page > base){
         return page;
     }
     void* pg = GetPageAboveBase(base);
     FreePage(page);
-    return pg;
+    return (void*)physical_to_virtual((uint64_t)pg);
     
 }
 uint64_t PageFrameAllocator::GetFreeRAM(){

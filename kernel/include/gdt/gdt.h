@@ -63,3 +63,4 @@ extern GDT DefaultGDT;
 
 
 extern "C" void LoadGDT(GDTDescriptor* gdtDescriptor);
+void write_tss(BITS64_SSD *g, tss_entry_t* tss_entry);

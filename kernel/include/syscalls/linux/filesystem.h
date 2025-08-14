@@ -123,8 +123,8 @@
 #ifndef __O_DSYNC
 # define __O_DSYNC	 010000
 #endif
-#ifndef __O_TMPFILE
-# define __O_TMPFILE   (020000000 | __O_DIRECTORY)
+#ifndef O_TMPFILE
+# define O_TMPFILE   (020000000 | __O_DIRECTORY)
 #endif
 
 #ifndef F_GETLK

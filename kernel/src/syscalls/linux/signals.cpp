@@ -96,6 +96,7 @@ int sys_sigreturn(){
 int sys_sigaltstack(const stack_t* ss, stack_t* old_ss){ // set and/or get signal stack context
     task_t* ctask = task_scheduler::get_current_task();
     if (ctask->sig_stack && old_ss != nullptr) old_ss->ss_sp = (void*)(ctask->sig_stack + TASK_SCHEDULER_DEFAULT_STACK_SIZE);
+    if (ss == nullptr) return 0;
     ctask->sig_sp = (uint64_t)ss->ss_sp;
     return 0;
 }

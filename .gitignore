@@ -8,6 +8,8 @@
 
 # Build folders
 bootloader/grub-*
+bootloader/limine*
+*.tar.*
 bootloader/BOOTX64.EFI
 applications/bin
 applications/lib

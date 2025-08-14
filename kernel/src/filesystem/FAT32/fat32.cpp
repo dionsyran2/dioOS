@@ -390,9 +390,9 @@ namespace filesystem{
         //node->fs_sec_data = (void*)this;
         node->type = dir->attributes == FAT_DIRECTORY ? VDIR : VREG;
         node->size = dir->file_size_in_bytes;
-        node->ops.read_dir = vfs::def_read_dir;
+        //node->ops.read_dir = vfs::def_read_dir;
         //node->ops.load = fat32_load;
-        node->ops.write = fat32_write;
+        //node->ops.write = fat32_write;
         //node->ops.create_subdirectory = fat32_create_dir;
         return node;
     }

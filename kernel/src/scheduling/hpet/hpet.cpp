@@ -10,7 +10,12 @@ namespace HPET
     void Initialize(){
         void* hpet_hdr = ACPI::FindTable(xsdt, "HPET");
         hdr = (hpet*)hpet_hdr;
-        hpet_base = (uint8_t*)hdr->address.address;
+
+        uint64_t physical_address = hdr->address.address;
+        uint64_t virtual_address = physical_to_virtual(physical_address);
+        globalPTM.MapMemory((void*)virtual_address, (void*)physical_address);
+        hpet_base = (uint8_t*) virtual_address;
+
         GCReg = (uint64_t*)(hpet_base + HPET_GLOBAL_CONF_REG);
         *GCReg &= ~1;
         while ((*GCReg & 1));

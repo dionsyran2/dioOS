@@ -2,19 +2,25 @@
 #include <stdint.h>
 #include <stddef.h>
 
-uint64_t GetMemorySize(EFI_MEMORY_DESCRIPTOR* mMap, uint64_t mMapEntries, uint64_t mMapDescSize){
+uint64_t MEMORY_BASE;
 
-    static uint64_t memorySizeBytes = 0;
-    if (memorySizeBytes > 0) return memorySizeBytes;
-
-    for (int i = 0; i < mMapEntries; i++){
-        EFI_MEMORY_DESCRIPTOR* desc = (EFI_MEMORY_DESCRIPTOR*)((uint64_t)mMap + (i * mMapDescSize));
-        memorySizeBytes += desc->numPages * 4096;
-    }
-
-    return memorySizeBytes;
-
+uint64_t physical_to_virtual(uint64_t addr){
+	return addr + MEMORY_BASE;
 }
+
+uint64_t virtual_to_physical(uint64_t addr){
+	return (addr >= MEMORY_BASE) ? addr - MEMORY_BASE : addr;
+}
+
+uint64_t GetMemorySize(limine_memmap_response* mmap){
+	uint64_t size = 0;
+	for (int i = 0; i < mmap->entry_count; i++){
+		size += mmap->entries[i]->length;
+	}
+	return size;
+}
+
+
 void *memmove(void *dest, const void *src, size_t n) {
     uint8_t *pdest = (uint8_t *)dest;
     const uint8_t *psrc = (const uint8_t *)src;
@@ -32,9 +38,10 @@ void *memmove(void *dest, const void *src, size_t n) {
     return dest;
 }
 
+#include <drivers/serial.h>
 void* memset(void* start, int value, uint64_t num){
     for (uint64_t i = 0; i < num; i += sizeof(uint32_t)){
-        *(uint64_t*)((uint64_t)start + i) = value;
+        *(uint32_t*)((uint64_t)start + i) = value;
     }
     return start;
 }

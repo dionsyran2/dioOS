@@ -1,15 +1,18 @@
 
 OUTPUT_FORMAT(elf64-x86-64)
 
-ENTRY(_start)
+ENTRY(main)
 
 SECTIONS
 {   
-    . = 1M;
+    . = 0xFFFFFFFF80000000;
     _KernelStart = .;
-    .multiboot_header : {
-        *(.multiboot_header)
-    } 
+    
+    .limine_requests : {
+        KEEP(*(.limine_requests_start))
+        KEEP(*(.limine_requests))
+        KEEP(*(.limine_requests_end))
+    }
 
     .text :
     {

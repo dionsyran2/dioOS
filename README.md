@@ -20,7 +20,7 @@ well, I would add screenshots here, but its just sh... it isn't anything special
 ## How to build
 ### Requirements
 You will need GCC... I guess any compiler will do but you will have to edit the makefile
-You may need other stuff, like wget. On a fresh install of ubuntu I had to install **bison** and **flex** (to compile grub).
+You may need other stuff, like wget.
 
 ### Build it
 Well, if you really wanna build this...

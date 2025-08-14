@@ -151,7 +151,7 @@ struct ext2_inode{
     uint32_t size_upper; // in version 0 rsvd
     uint32_t fragment_block;
     ext2_ossv2_linux ossv2;
-} __attribute__((packed));
+};
 
 
 /*
@@ -193,24 +193,36 @@ struct ext2_directory{
 namespace filesystem{
     bool is_ext2(vblk_t* blk, uint64_t start_block);
 
+    struct ext2_list{
+        ext2_list* next;
+        uint32_t parent_inode;
+        vnode_t* child_list;
+        int cnt;
+    };
+
     class ext2{
         public:
         ext2(vblk_t* blk, uint64_t start_block, uint64_t last_block, PartEntry* gpt_entry);
         ext2_inode* read_inode(uint32_t inode);
-        void* load_inode(ext2_inode* inode, uint32_t* length);
-        bool write_inode(uint32_t inode, void* buff, uint32_t ln);
+        int64_t load_inode(ext2_inode* inode, void* buffer, size_t cnt, size_t offset);
+        int64_t write_inode(uint32_t inode, const void* buffer, size_t cnt, size_t offset);
         int mkdir(uint32_t parent_inode, const char* name, ext2_directory** out);
         int create_file(uint32_t parent_inode, const char* name, ext2_directory** out);
         vnode_t* create_and_mount_dir(ext2_directory* dir, ext2_inode* inode, vnode_t* parent);
         void mount_dir(uint32_t inode, vnode_t* parent, bool sub);
+        uint32_t inode_truncate(ext2_inode* inode, size_t num_of_blocks);
+        bool save_inode_entry(uint32_t inode, ext2_inode* inode_entry);
+        int read_dir(uint32_t inode, vnode_t** inode_out);
+        public:
+        uint32_t block_size;
+
         private:
         vblk_t* blk;
-        
+        ext2_list* inode_cache;
         uint64_t start_sector;
         uint64_t last_sector;
         uint8_t partition_guid[16];
 
-        uint32_t block_size;
         uint32_t sectors_per_block;
 
         uint64_t superblock_size_in_pages;
@@ -226,6 +238,8 @@ namespace filesystem{
 
         uint32_t inode_size_in_bytes;
         uint32_t inodes_per_group;
+
+        uint32_t last_allocated_block;
 
         ext2_superblock* superblock;
         ext2_block_group_descriptor* block_group_table;
@@ -248,7 +262,6 @@ namespace filesystem{
         uint32_t* _get_block_table(ext2_inode* inode, uint32_t* length);
         uint64_t _block_to_sector(uint64_t block);
         char* _mount_fs();
-        bool _save_inode_entry(uint32_t inode, ext2_inode* inode_entry);
         uint32_t _find_free_inode();
         bool _mark_inode(uint32_t inode, bool v);
         uint32_t _find_free_block();
@@ -264,7 +277,19 @@ namespace filesystem{
         size_t _inode_truncate_indirect_l1(uint32_t singly_indirect_block_pointer, size_t block_count);
         size_t _inode_truncate_indirect_l2(uint32_t doubly_indirect_block_pointer, size_t block_count);
         size_t _inode_truncate_indirect_l3(uint32_t triple_indirect_block_pointer, size_t block_count);
-        uint32_t _inode_truncate(ext2_inode* inode, size_t num_of_blocks);
         bool _push_dir_entry(uint32_t parent, ext2_directory* directory_entry);
+        uint32_t _find_free_blocks(uint32_t count, uint32_t& actual_count_out);
+        bool _mark_blocks(uint32_t start_block, uint32_t count, bool value);
+        void _inode_add_blocks(ext2_inode* inode, const uint32_t* blocks, uint32_t count);
+        bool _inode_add_blocks_indirect_l1(uint32_t block_ptr, const uint32_t* blocks, uint32_t& block_index, uint32_t total);
+        bool _inode_add_blocks_indirect_l2(uint32_t block_ptr, const uint32_t* blocks, uint32_t& block_index, uint32_t total);
+        bool _inode_add_blocks_indirect_l3(uint32_t block_ptr, const uint32_t* blocks, uint32_t& block_index, uint32_t total);
+
+        ext2_list* get_dir_cache(uint32_t dir);
+        void cache_vnode(uint32_t parent, vnode_t* node);
+        void append_child(ext2_list* parent, vnode_t* node);
+        void clear_cache(uint32_t parent);
+        vnode_t* get_cached_children(uint32_t inode);
+        
     };
 }

@@ -14,7 +14,6 @@
 ArrayList<PCI_BASE_DRIVER*>* PCI_DRIVERS;
 namespace PCI{
     int parse_crs(uacpi_object* obj){
-
         uacpi_namespace_node *sb = uacpi_namespace_get_predefined(UACPI_PREDEFINED_NAMESPACE_SB);
         uacpi_object* link;
         char* obj_name = obj->buffer->text;
@@ -178,7 +177,8 @@ namespace PCI{
         uint64_t offset = function << 12;
 
         uint64_t functionAddress = deviceAddress + offset;
-        globalPTM.MapMemory((void*)functionAddress, (void*)functionAddress);
+        if (!globalPTM.isMapped((void*)(functionAddress & ~0xFFFUL))) globalPTM.MapMemory((void*)(functionAddress & ~0xFFFUL), (void*)deviceAddress + (offset & ~0xFFFUL));
+
 
         PCIDeviceHeader* pciDeviceHeader = (PCIDeviceHeader*)functionAddress;
 
@@ -241,7 +241,7 @@ namespace PCI{
                                 }else{
                                     PCI_DRIVERS->add(driver);
                                 }
-
+                                
                                 break;
                         }
                 }
@@ -249,7 +249,7 @@ namespace PCI{
             case 0x04: //Multimedia
                 switch(pciDeviceHeader->Subclass){
                     case 0x03:{ //HD Audio
-                        new HDA(pciDeviceHeader); //TODO: Make it work completely
+                        new HDA(pciDeviceHeader);
                         break;
                     }
                 }
@@ -263,7 +263,7 @@ namespace PCI{
         uint64_t offset = device << 15;
 
         uint64_t deviceAddress = busAddress + offset;
-        globalPTM.MapMemory((void*)deviceAddress, (void*)deviceAddress);
+        if (!globalPTM.isMapped((void*)(deviceAddress & ~0xFFFUL))) globalPTM.MapMemory((void*)(deviceAddress & ~0xFFFUL), (void*)busAddress + (offset & ~0xFFFUL));
 
         PCIDeviceHeader* pciDeviceHeader = (PCIDeviceHeader*)deviceAddress;
 
@@ -280,7 +280,7 @@ namespace PCI{
         uint64_t offset = bus << 20;
 
         uint64_t busAddress = baseAddress + offset;
-        globalPTM.MapMemory((void*)busAddress, (void*)busAddress);
+        if (!globalPTM.isMapped((void*)(busAddress & ~0xFFFUL))) globalPTM.MapMemory((void*)(busAddress & ~0xFFFUL), (void*)baseAddress + (offset & ~0xFFFUL));
 
         PCIDeviceHeader* pciDeviceHeader = (PCIDeviceHeader*)busAddress;
 
@@ -300,7 +300,11 @@ namespace PCI{
             ACPI::DeviceConfig* newDeviceConfig = (ACPI::DeviceConfig*)((uint64_t)mcfg + sizeof(ACPI::MCFGHeader) + (sizeof(ACPI::DeviceConfig) * t));
             cSeg = t;
             for (uint64_t bus = newDeviceConfig->StartBus; bus < newDeviceConfig->EndBus; bus++){
-                EnumerateBus(newDeviceConfig->BaseAddress, bus);
+                void* physical_address = (void*)newDeviceConfig->BaseAddress;
+                void* virtual_address = (void*)physical_to_virtual((uint64_t)physical_address);
+                globalPTM.MapMemory(virtual_address, physical_address);
+
+                EnumerateBus((uint64_t)virtual_address, bus);
             }
         }
 

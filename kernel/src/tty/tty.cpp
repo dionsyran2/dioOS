@@ -62,21 +62,20 @@ namespace tty{
     }
 
     /* CALLS */
-    int vnode_tty_write(const char* txt, size_t length, vnode_t* node){
+    int64_t vnode_tty_write(const void* data, size_t length, size_t offset, vnode_t* node){
         tty_t* tty = (tty_t*)node->misc_data[0];
-        return tty->in_pipe->write(txt, length); // why have i named every data buffer a txt... idc anymore, txt it is.
+        return tty->in_pipe->write(data, length); // why have i named every data buffer a txt... idc anymore, txt it is.
     }
 
-    void* vnode_tty_read(size_t* length, vnode* node){
+    int64_t vnode_tty_read(void* buffer, size_t length, size_t offset, vnode* node){
         tty_t* tty = (tty_t*)node->misc_data[0];
 
-        bool canonical = tty->term.c_lflag & ICANON;
+        bool canonical = (tty->term.c_lflag & ICANON) != 0;
         while(!tty->out_pipe->data_read) __asm__ ("pause"); // wait for data
         if (canonical) while(!tty->newline_entered) __asm__ ("pause"); // if canonical mode is enabled, buffer the data till enter is pressed
-        tty->newline_entered = false; // clear the flag
+        if (tty->out_pipe->data_read == false) tty->newline_entered = false; // clear the flag
 
-        void* ret;
-        tty->out_pipe->read(length, &ret); // return the data
+        int64_t ret = tty->out_pipe->read(buffer, length);
         node->data_read = tty->out_pipe->data_read;
         return ret;
     }
@@ -87,16 +86,14 @@ namespace tty{
     void term_task(tty_t* tty){
         while(1){
             if (tty->in_pipe->data_read){
-                size_t cnt = 0;
                 pipe_data* p = (pipe_data*)tty->in_pipe->misc_data[0];
-                void* buffer;
-                tty->in_pipe->read(&cnt, &buffer); // WHY HAVE I NAMED IT LOAD?!?!
+                int64_t cnt = tty->in_pipe->read(tty->buffer, tty->buffer_size);
                 if (prev_cursor_state) {globalRenderer->clear_cursor(prev_cursor_pos[0], prev_cursor_pos[1]); prev_cursor_state = false;}
-                tty->print((const char*)buffer, cnt);
+                tty->print((const char*)tty->buffer, cnt);
             }
 
             uint64_t ticks = APICticsSinceBoot;
-            if ((ticks - 200) >= prev_cursor_ticks && !tty->disable_cursor){
+            if ((ticks - 500) >= prev_cursor_ticks && !tty->disable_cursor){
                 if (prev_cursor_state){
                     globalRenderer->clear_cursor(prev_cursor_pos[0], prev_cursor_pos[1]);
                 }else{
@@ -144,12 +141,11 @@ namespace tty{
 
         tty->node = tty_node;
 
-        // We will use vga fonts that are 8x16
         tty->char_width = 8;
-        tty->char_height = 16;
+        tty->char_height = globalRenderer->font_height;
 
-        tty->rows = globalRenderer->targetFramebuffer->common.framebuffer_height / tty->char_height;
-        tty->cols = globalRenderer->targetFramebuffer->common.framebuffer_width / tty->char_width;
+        tty->rows = globalRenderer->height / tty->char_height;
+        tty->cols = globalRenderer->width / tty->char_width;
 
         // Allocate the table
         tty->screen = new cell_t[tty->rows * tty->cols];
@@ -169,12 +165,16 @@ namespace tty{
         tty->in_pipe = CreatePipe(name, nullptr);
         tty->out_pipe = CreatePipe(name, nullptr);
 
+        tty->buffer = GlobalAllocator.RequestPage();
+        tty->buffer_size = 0x1000;
         task_t* main = task_scheduler::create_process("Teletype Terminal Emulator (TTY)", (function)term_task);
         main->rdi = (uint64_t)tty;
         main->jmp = true;
         task_scheduler::mark_ready(main);
 
         focused_tty = tty; // used for the keyboard driver
+
+        globalRenderer->screen->disable_backbuffer(); // speed up the terminal
         return 0;
     }
 
@@ -199,7 +199,7 @@ namespace tty{
         }
     }
 
-    void tty::set_chr(uint32_t row, uint32_t col, Color fb, Color bg, char chr, uint32_t attrs){
+    void tty::set_chr(uint32_t row, uint32_t col, Color fb, Color bg, wchar_t chr, uint32_t attrs){
         cell_t* cell = get_cell(row, col);
         cell->bg = bg;
         cell->fg = fb;
@@ -248,7 +248,14 @@ namespace tty{
             set_chr(rows - 1, col, 0xFFFFFF, 0, ' ', 0);
         }
 
-        draw_screen();
+        globalRenderer->screen->scroll(char_height);
+        int end = globalRenderer->height - char_height - 1;
+        for (int y = globalRenderer->height - 1; y >= end; y--){
+            for (int x = 0; x < globalRenderer->width; x++){
+                globalRenderer->screen->set_pixel(x, y, 0);
+            }
+        }
+        globalRenderer->screen->update_screen();
     }
 
     int tty::handle_csi_escape_sequence(const char* buffer, int rem) {
@@ -527,23 +534,71 @@ namespace tty{
         return i;
     }
 
+    size_t decode_utf8(const char* str, uint32_t* codepoint) {
+        uint8_t c = (uint8_t)str[0];
+
+        if (c <= 0x7F) {
+            // 1-byte (ASCII)
+            *codepoint = c;
+            return 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            // 2-byte
+            uint8_t c1 = (uint8_t)str[1];
+            if ((c1 & 0xC0) != 0x80) return 0;
+
+            *codepoint = ((c & 0x1F) << 6) |
+                        (c1 & 0x3F);
+            return 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            // 3-byte
+            uint8_t c1 = (uint8_t)str[1];
+            uint8_t c2 = (uint8_t)str[2];
+            if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80) return 0;
+
+            *codepoint = ((c & 0x0F) << 12) |
+                        ((c1 & 0x3F) << 6) |
+                        (c2 & 0x3F);
+            return 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            // 4-byte
+            uint8_t c1 = (uint8_t)str[1];
+            uint8_t c2 = (uint8_t)str[2];
+            uint8_t c3 = (uint8_t)str[3];
+            if ((c1 & 0xC0) != 0x80 ||
+                (c2 & 0xC0) != 0x80 ||
+                (c3 & 0xC0) != 0x80) return 0;
+
+            *codepoint = ((c & 0x07) << 18) |
+                        ((c1 & 0x3F) << 12) |
+                        ((c2 & 0x3F) << 6) |
+                        (c3 & 0x3F);
+            return 4;
+        }
+
+        // Invalid sequence
+        return 0;
+    }
+
+
     void tty::print(const char* str, uint32_t length){
         #ifdef SERIAL_TTY
         for (uint32_t i = 0; i < length; i++){
             if (str[i] != '\a') serialf("%c", str[i]);
         }
         #endif
-        for (uint32_t i = 0; i < length; i++){
+
+
+        for (uint32_t i = 0; i < length;){
             if (str[i] == '\0') continue;
             if (str[i] == '\033'){
                 if (str[i + 1] == '['){ // csi escape sequence
                     if (str[i + 2] == '?'){ // csi escape sequence
                         i += 3;
-                        i += handle_private_escape_sequence(&str[i], length - i) - 1;
+                        i += handle_private_escape_sequence(&str[i], length - i);
                         continue;
                     }
                     i += 2;
-                    i += handle_csi_escape_sequence(&str[i], length - i) - 1;
+                    i += handle_csi_escape_sequence(&str[i], length - i);
                     continue;
                 }else if (str[i + 1] == 'M'){ // move 1 line up
                     if (current_row > 0) current_row--;
@@ -561,39 +616,48 @@ namespace tty{
                     continue;
                 }
             }
-            write_chr(str[i]);
+            uint32_t codepoint;
+            size_t bytes = decode_utf8(&str[i], &codepoint);
+            if (bytes == 0) {
+                write_chr(L'\ufffd');
+                i++;
+                continue;
+            }
+
+            write_chr(codepoint);
+            i += bytes;
         }
     }
 
 
-    void tty::write_chr(char chr){
+    void tty::write_chr(wchar_t chr){
         switch (chr){
             case '\a':
                 beep();
-                break;
+                return;
 
             case '\b':
                 if (current_column > 0){
                     current_column--;
-                    if (term.c_lflag & ECHOE){ // ECHO-Erase
+                    /*if ((term.c_lflag & ECHOE) != 0){ // ECHO-Erase
                         set_chr(current_row, current_column, fg, bg, ' ', style);
                         draw_cell(current_row, current_column);
-                    }
+                    }*/
                 }
-                break;
+                return;
 
             case '\f':
                 clear();
-                break;
+                return;
 
             case '\n':
                 if (term.c_oflag & ONLCR) current_column = 0;
                 current_row++;
-                break;
+                return;
 
             case '\r':
                 current_column = 0;
-                break;
+                return;
 
             case '\t': {
                 uint32_t tab_size = 8;
@@ -607,23 +671,27 @@ namespace tty{
 
             case '\v':
                 write_chr('\n');
-                break;
+                return;
+            case '\x0e': // Shift out
+                return;
+            case '\x0f': //Shift in
+                return;
 
-            default:
+            default:{
+                if (current_column >= cols) {
+                    current_column = 0;
+                    current_row++;
+                }
+
+                if (current_row >= rows) {
+                    scroll_up();
+                    current_row = rows - 1;
+                }
                 set_chr(current_row, current_column, fg, bg, chr, style);
                 draw_cell(current_row, current_column);
                 current_column++;
                 break;
-        }
-
-        if (current_column >= cols) {
-            current_column = 0;
-            current_row++;
-        }
-
-        if (current_row >= rows) {
-            scroll_up();
-            current_row = rows - 1;
+            }
         }
     }
 
@@ -632,35 +700,34 @@ namespace tty{
         if (is_escape) {
             switch (ascii){
                 case 'A':{
-                    out_pipe->write("\x1B[A", 3);
+                    out_pipe->write("\e[A", 3);
                     break;
                 }
                 case 'B':{
-                    out_pipe->write("\x1B[B", 3);
+                    out_pipe->write("\e[B", 3);
                     break;
                 }
                 case 'C':{
-                    out_pipe->write("\x1B[C", 3);
+                    out_pipe->write("\e[C", 3);
                     break;
                 }
                 case 'D':{
-                    out_pipe->write("\x1B[D", 3);
+                    out_pipe->write("\e[D", 3);
                     break;
                 }
                 case 'E':{
                     //serialf("escape\n");
-                    out_pipe->write("\x1B", 1);
+                    out_pipe->write("\e", 1);
                     break;
                 }
                 case 0x03:{ // Ctrl + C
-                    //serialf("ctrl + c\n");
-                    //if (term.c_lflag & ISIG) { // Ctrl+C
-                        //serialf("isig\n");
+
+                    if (term.c_lflag & ISIG) { // Ctrl+C
                         if (foreground_group_id > 0) 
                             task_scheduler::send_signal_to_group(foreground_group_id, SIGINT);
-                        //return;
-                    //}
-                    //out_pipe->write("\x03", 1);
+                        return;
+                    }
+                    out_pipe->write("\x03", 1);
 
                     break;
                 }
@@ -677,7 +744,55 @@ namespace tty{
                     break;
                 }
                 case '~' : { // Delete
-                    out_pipe->write("\x1B[3~", 1);
+                    out_pipe->write("\e3~", 3);
+                    break;
+                }
+                case 11: {// F1
+                    out_pipe->write("\eOP", 3);
+                    break;
+                }
+                case 12: {// F2
+                    out_pipe->write("\eOQ", 3);
+                    break;
+                }
+                case 13: {// F3
+                    out_pipe->write("\eOR", 3);
+                    break;
+                }
+                case 14: {// F4
+                    out_pipe->write("\eOS", 3);
+                    break;
+                }
+                case 15: {// F5
+                    out_pipe->write("\e[15~", 5);
+                    break;
+                }
+                case 17: {// F6
+                    out_pipe->write("\e[17~", 5);
+                    break;
+                }
+                case 18: {// F7
+                    out_pipe->write("\e[18~", 5);
+                    break;
+                }
+                case 19: {// F8
+                    out_pipe->write("\e[19~", 5);
+                    break;
+                }
+                case 20: {// F9
+                    out_pipe->write("\e[20~", 5);
+                    break;
+                }
+                case 21: {// F10
+                    out_pipe->write("\e[21~", 5);
+                    break;
+                }
+                case 23: {// F11
+                    out_pipe->write("\e[23~", 5);
+                    break;
+                }
+                case 24: {// F12
+                    out_pipe->write("\e[24~", 5);
                     break;
                 }
                 default:
@@ -692,7 +807,7 @@ namespace tty{
         }
 
         bool echo = term.c_lflag & ECHO;
-        bool canonical = term.c_lflag & ICANON;
+        bool canonical = (term.c_lflag & ICANON) != 0;
 
         if (ascii == '\b') {
             cell_t* prev_cell = get_cell(current_row, current_column > 0 ? current_column - 1 : 0);

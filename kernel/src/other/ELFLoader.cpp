@@ -1,6 +1,7 @@
 #include <other/ELFLoader.h>
 #include <kerrno.h>
 #include <userspace/userspace.h>
+#include <random.h>
 
 uint32_t get_hwcap_x86() {
     uint32_t eax, ebx, ecx, edx;
@@ -70,20 +71,21 @@ namespace ELFLoader
         uint64_t seg_start = hdr->p_vaddr & ~(align - 1);
         size_t offset = hdr->p_vaddr - seg_start;
         size_t memsz = hdr->p_memsz + offset;
-        size_t page_count = (memsz + 0xFFF) / 0x1000;
+        size_t page_count = DIV_ROUND_UP(memsz, 0x1000);
 
         void* m = GlobalAllocator.RequestPages(page_count);
-        memset(m, 0, memsz);
+        memset(m, 0, page_count * 0x1000);
 
         uint64_t virt_base = base + seg_start;
 
         //kprintf("p_align: %llx, v_addr: %llx, p_memsz: %d bytes\n", hdr->p_align, base + hdr->p_vaddr, hdr->p_memsz);
-        serialf("\e[0;35mLoading header at v_addr: %llx, %d bytes\e[0m\n", hdr->p_vaddr + base, hdr->p_memsz);
+        //serialf("\e[0;35mLoading header at v_addr: %llx, %d bytes\e[0m\n", hdr->p_vaddr + base, hdr->p_memsz);
         for (size_t o = 0; o < page_count; o++) {
             uint64_t v_addr = virt_base + (o * 0x1000);
             if (ptm->isMapped((void*)v_addr)) continue;
             uint64_t p_addr = (uint64_t)m + (o * 0x1000);
-            ptm->MapMemory((void*)v_addr, (void*)p_addr);
+
+            ptm->MapMemory((void*)v_addr, (void*)virtual_to_physical(p_addr));
             if ((hdr->p_flags & PF_R) && (hdr->p_flags & PF_W) == 0) {
                 ptm->SetPageFlag((void*)v_addr, PT_Flag::ReadWrite, false);
             }else{
@@ -119,12 +121,12 @@ namespace ELFLoader
 
     int Load(vnode_t *node, int priority, user_t* user, vnode_t* tty, session::session_t* session, task_t* parent){
         globalRenderer->Set(true);
+        node->open();
+        
+        uint8_t* file = new uint8_t[node->size];
+        int64_t res = node->read(file, node->size, 0);
+        if (res < 0) {delete[] file; return res;}
 
-        size_t cnt = 0;
-        uint8_t* file = nullptr;
-        int res = node->read(&cnt, (void**)&file);
-        serialf("RES: %d %llx %d\n", res, file, cnt);
-        bool b = false;
         Elf64_Ehdr* ehdr = (Elf64_Ehdr*)file;
 
         // Verify the elf
@@ -177,40 +179,41 @@ namespace ELFLoader
                 //kprintf(0xFF0000, "Could not locate the interpreter: %s\n", interp_path);
                 return -1;
             }
+            interp_node->open();
 
-            size_t cnt = 0;
-            uint8_t* interp;
-            interp_node->read(&cnt, (void**)&interp);
-        
+            uint8_t* interp = new uint8_t[interp_node->size];
+            int64_t res = interp_node->read(interp, interp_node->size, 0);
+
+            if (res < 0) {delete[] file; delete[] interp; return res;}
             Elf64_Ehdr* interp_ehdr = (Elf64_Ehdr*)interp;
+
             if (!verify_elf(interp_ehdr)){
                 kprintf("The interpreter is not a valid ELF64 file\n");
                 return 0;
             }
+
             uint64_t interp_entry = LoadInMemory(ptm, 0x100000000000 , interp, nullptr);
-            uint64_t lowest_header = 0x80000000000;
-            uint64_t main_entry = LoadInMemory(ptm, 0x80000000000, file, &lowest_header);
-            //kprintf("main: %llx\n", main_entry);
+            uint64_t lowest_header = 0;
+            uint64_t main_entry = LoadInMemory(ptm, 0, file, &lowest_header);
             task->entry = (function)interp_entry;
-            //kprintf("entry: %llx\n", interp_entry);
 
             uint8_t* ptr = new uint8_t[16];
-            ptr[0] = 0x10;
-            ptr[1] = 0x10;
-            ptr[2] = 0x10;
-            ptr[3] = 0x10;
-            ptr[4] = 0x10;
-            ptr[5] = 0x10;
-            ptr[6] = 0x10;
-            ptr[7] = 0x10;
-            ptr[8] = 0x10;
-            ptr[9] = 0x10;
-            ptr[10] = 0x10;
-            ptr[11] = 0x10;
-            ptr[12] = 0x10;
-            ptr[13] = 0x10;
-            ptr[14] = 0x10;
-            ptr[15] = 0x10;
+            ptr[0] = (uint8_t)(random() & 0xFF);
+            ptr[1] = (uint8_t)(random() & 0xFF);
+            ptr[2] = (uint8_t)(random() & 0xFF);
+            ptr[3] = (uint8_t)(random() & 0xFF);
+            ptr[4] = (uint8_t)(random() & 0xFF);
+            ptr[5] = (uint8_t)(random() & 0xFF);
+            ptr[6] = (uint8_t)(random() & 0xFF);
+            ptr[7] = (uint8_t)(random() & 0xFF);
+            ptr[8] = (uint8_t)(random() & 0xFF);
+            ptr[9] = (uint8_t)(random() & 0xFF);
+            ptr[10] = (uint8_t)(random() & 0xFF);
+            ptr[11] = (uint8_t)(random() & 0xFF);
+            ptr[12] = (uint8_t)(random() & 0xFF);
+            ptr[13] = (uint8_t)(random() & 0xFF);
+            ptr[14] = (uint8_t)(random() & 0xFF);
+            ptr[15] = (uint8_t)(random() & 0xFF);
 
             char* arch = new char[strlen("x86_64") + 1];
             strcpy(arch, "x86_64");
@@ -222,7 +225,7 @@ namespace ELFLoader
             auxv_t auxv_entries[] = {
                 {AT_HWCAP, get_hwcap_x86()},
                 {AT_PAGESZ, 0X1000},
-                {AT_PHDR, 0x80000000000 + ehdr->e_phoff},
+                {AT_PHDR, lowest_header + ehdr->e_phoff},
                 {AT_PHENT, ehdr->e_phentsize},
                 {AT_PHNUM, ehdr->e_phnum},
                 {AT_BASE, 0x100000000000 },
@@ -240,18 +243,22 @@ namespace ELFLoader
             };
 
             char* argv[] = { vfs::get_full_path_name(node), NULL };
-            const char* envp[] = { "PATH=/bin", "SHELL=/bin/bash", "NAME=dioOS", "TERM=ansi", "DISPLAY=:0", "PS1=\\[\\033[01;32m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ", NULL };
+            const char* envp[] = { "PATH=/bin", "SHELL=/bin/bash", "NAME=dioOS", "TERM=linux", "DISPLAY=:0", "PS1=\\[\\033[01;32m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ", NULL };
             setup_stack(task, 1, argv, (char**)envp, auxv_entries);
 
             //kprintf("INSPECT: %llx\n", task->rsp);
             task_scheduler::mark_ready(task);
-
+            interp_node->close();
+            delete[] file;
+            delete[] interp;
         }else{
-            uint64_t entry = LoadInMemory(ptm, ehdr->e_type == 1 ? 0x80000000 : 0, file, nullptr);
+            uint64_t entry = LoadInMemory(ptm, 0, file, nullptr);
             task->entry = (function)entry;
             task_scheduler::mark_ready(task);
+            delete[] file;
         }
-        return 0;
+        node->close();
+        return task->pid;
     }
 
     
@@ -259,19 +266,20 @@ namespace ELFLoader
         if (node == nullptr) return -1;
         
         task_t* ctask = task_scheduler::get_current_task();
+        node->open();
+        uint8_t* file = new uint8_t[node->size];
+        int64_t res = node->read(file, node->size, 0);
+        if (res < 0) {delete[] file; return res;}
 
-        size_t cnt = 0;
-        uint8_t* file;
-        node->read(&cnt, (void**)&file);
         if (file == nullptr) return -ENOENT;
-        if (cnt < sizeof(Elf64_Ehdr)) return -ENOENT;
+        if (res < sizeof(Elf64_Ehdr)) return -ENOENT;
 
         Elf64_Ehdr* ehdr = (Elf64_Ehdr*)file;
 
         // Verify the elf
         if (!verify_elf(ehdr)){
             //kprintf("Not a valid ELF64 file\n");
-            ctask->tty->write("Not a valid ELF64 file!\n\r", 25);
+            ctask->tty->write("Not a valid ELF64 file!\n\r", 25, 0);
             return -EINVAL;
         }
 
@@ -309,7 +317,7 @@ namespace ELFLoader
         char* interp_path = GetInterpreter(file);
 
         if (interp_path != nullptr){
-            serialf("interpreter: %s\n", interp_path);
+            //serialf("interpreter: %s\n", interp_path);
 
             vnode_t* interp_node = vfs::resolve_path(interp_path);
 
@@ -317,46 +325,47 @@ namespace ELFLoader
                 kprintf(0xFF0000, "Could not locate the interpreter: %s\n", interp_path);
                 return -1;
             }
+            interp_node->open();
 
-            size_t cnt = 0;
-            uint8_t* interp;
-            interp_node->read(&cnt, (void**)&interp);
+            uint8_t* interp = new uint8_t[interp_node->size];
+            int64_t res = interp_node->read(interp, interp_node->size, 0);
+
+            if (res < 0) {delete[] file; delete[] interp; return res;}
+
             if (interp_node == nullptr) return -ENOENT;
-            if (cnt < sizeof(Elf64_Ehdr)) return -ENOENT;
+            if (res < sizeof(Elf64_Ehdr)) return -ENOENT;
            
             Elf64_Ehdr* interp_ehdr = (Elf64_Ehdr*)interp;
             uint64_t interp_entry = LoadInMemory(ptm, 0x100000000000 , interp, nullptr);
-            uint64_t lowest_header = 0x80000000000;
-            uint64_t main_entry = LoadInMemory(ptm, (ehdr->e_type == 1 || ehdr->e_type == 3) ? 0x80000000000 : 0, file, &lowest_header);
+            uint64_t lowest_header = 0;
+            uint64_t main_entry = LoadInMemory(ptm, 0, file, &lowest_header);
             //kprintf("main: %llx\n", main_entry);
             task->entry = (function)interp_entry;
             //kprintf("entry: %llx\n", interp_entry);
 
             uint8_t* ptr = new uint8_t[16];
-            ptr[0] = 0x10;
-            ptr[1] = 0x10;
-            ptr[2] = 0x10;
-            ptr[3] = 0x10;
-            ptr[4] = 0x10;
-            ptr[5] = 0x10;
-            ptr[6] = 0x10;
-            ptr[7] = 0x10;
-            ptr[8] = 0x10;
-            ptr[9] = 0x10;
-            ptr[10] = 0x10;
-            ptr[11] = 0x10;
-            ptr[12] = 0x10;
-            ptr[13] = 0x10;
-            ptr[14] = 0x10;
-            ptr[15] = 0x10;
+            ptr[0] = (uint8_t)(random() & 0xFF);
+            ptr[1] = (uint8_t)(random() & 0xFF);
+            ptr[2] = (uint8_t)(random() & 0xFF);
+            ptr[3] = (uint8_t)(random() & 0xFF);
+            ptr[4] = (uint8_t)(random() & 0xFF);
+            ptr[5] = (uint8_t)(random() & 0xFF);
+            ptr[6] = (uint8_t)(random() & 0xFF);
+            ptr[7] = (uint8_t)(random() & 0xFF);
+            ptr[8] = (uint8_t)(random() & 0xFF);
+            ptr[9] = (uint8_t)(random() & 0xFF);
+            ptr[10] = (uint8_t)(random() & 0xFF);
+            ptr[11] = (uint8_t)(random() & 0xFF);
+            ptr[12] = (uint8_t)(random() & 0xFF);
+            ptr[13] = (uint8_t)(random() & 0xFF);
+            ptr[14] = (uint8_t)(random() & 0xFF);
+            ptr[15] = (uint8_t)(random() & 0xFF);
 
             char* arch = new char[strlen("x86_64") + 1];
             strcpy(arch, "x86_64");
             char* fp = vfs::get_full_path_name(node);
             char* execfn = new char[strlen(fp) + 1];
             strcpy(execfn, fp);
-
-            serialf("LOWEST: %llx\n", lowest_header);
 
             auxv_t auxv_entries[] = {
                 {AT_HWCAP, get_hwcap_x86()},
@@ -381,19 +390,24 @@ namespace ELFLoader
             
             setup_stack(task, argc, argv, (char**)envp, auxv_entries);
 
-            //kprintf("INSPECT: %llx\n", task->rsp);
             ctask->state = task_state_t::DISABLED;
+            delete[] file;
+            delete[] interp;
+            interp_node->close();
+            node->close();
             task_scheduler::remove_task(ctask);
             task_scheduler::mark_ready(task);
             asm ("sti");
             while(1);
 
         }else{
-            uint64_t entry = LoadInMemory(ptm, ehdr->e_type == 1 ? 0x80000000 : 0, file, nullptr);
+            uint64_t entry = LoadInMemory(ptm, 0, file, nullptr);
             task->entry = (function)entry;
             ctask->state = task_state_t::DISABLED;
+            delete[] file;
             task_scheduler::remove_task(ctask);
             task_scheduler::mark_ready(task);
+            node->close();
             asm ("sti");
             while(1);
         }

@@ -1,9 +1,8 @@
 #pragma once
-#include <efiMemory.h>
 #include <stdint.h>
 #include <Bitmap.h>
 #include <memory.h>
-#include <multiboot2.h>
+#include <limine.h>
 
 //remove
 #include <cstr.h>
@@ -11,7 +10,7 @@
 
 class PageFrameAllocator {
     public:
-    void ReadEFIMemoryMap(EFI_MEMORY_DESCRIPTOR* mMap, size_t mMapSize, size_t mMapDescSize);
+    void ReadEFIMemoryMap(limine_memmap_response* mmap);
     Bitmap PageBitmap;
     void FreePage(void* address);
     void FreePages(void* address, uint64_t pageCount);
@@ -38,5 +37,5 @@ extern uint64_t freeMemory;
 extern uint64_t reservedMemory;
 extern uint64_t usedMemory;
 extern PageFrameAllocator GlobalAllocator;
-extern void* lowestFreeSeg;
+extern uint64_t lowestFreeSeg;
 extern size_t lowestFreeSegSize; 

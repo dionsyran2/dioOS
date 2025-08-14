@@ -127,7 +127,6 @@ void xhci_event_ring::dequeue_events(kstl::Vector<xhci_trb_t*>& trbs){
         xhci_trb_t* trb = _dequeue_trb();
         if (!trb) break;
 
-
         trbs.push_back(trb);
     }
 

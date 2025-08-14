@@ -9,8 +9,8 @@ bool load_passwd(){
     vnode_t* file = vfs::resolve_path("/etc/passwd");
     if (file == nullptr) return false;
     file->open();
-    size_t cnt = 0;
-    char* data = (char*)file->ops.read(&cnt, file);
+    char* data = new char[file->size];
+    size_t cnt = file->read(data, file->size, 0);
     cnt = strlen(data);
 
 
@@ -97,6 +97,7 @@ bool load_passwd(){
 
         delete[] tmp;
     }
+    delete[] data;
     return true;
 }
 
@@ -107,8 +108,9 @@ bool load_shadow(){
     vnode_t* file = vfs::resolve_path("/etc/shadow");
     if (file == nullptr) return false;
     file->open();
-    size_t cnt = 0;
-    char* data = (char*)file->ops.read(&cnt, file);
+    char* data = new char[file->size];
+    size_t cnt = file->read(data, file->size, 0);
+    
     cnt = strlen(data);
 
 
@@ -194,6 +196,22 @@ void hash_to_string(BYTE hash[32], char* buffer){
     }
 }
 
+bool load_users(){
+    if (usr_data == nullptr) usr_data = GlobalAllocator.RequestPage(); // Allocate 1 page for all of the data
+    memset(usr_data, 0, 0x1000);
+    uint8_t* usr_cnt = (uint8_t*)usr_data;
+    *usr_cnt = 0;
+
+    if (!load_passwd()) return false;
+    if (!load_shadow()) return false;
+
+    // Set up page protection (you dont want user applications to access this)
+    globalPTM.SetPageFlag(usr_data, PT_Flag::NX, true); // Set the no execute bit
+    globalPTM.SetPageFlag(usr_data, PT_Flag::UserSuper, false); // Can only be accessed in CPL 0
+    globalPTM.SetPageFlag(usr_data, PT_Flag::ReadWrite, false); // Make the page read only
+    return true;
+}
+
 user_t* validate_user(char* user, char* passwd){
     uint8_t usr_cnt = *(uint8_t*)usr_data;
 
@@ -217,20 +235,4 @@ user_t* validate_user(char* user, char* passwd){
         }
     }
     return nullptr;
-}
-
-bool load_users(){
-    usr_data = GlobalAllocator.RequestPage(); // Allocate 1 page for all of the data
-    memset(usr_data, 0, 0x1000);
-    uint8_t* usr_cnt = (uint8_t*)usr_data;
-    *usr_cnt = 0;
-
-    if (!load_passwd()) return false;
-    if (!load_shadow()) return false;
-
-    // Set up page protection (you dont want user applications to access this)
-    globalPTM.SetPageFlag(usr_data, PT_Flag::NX, true); // Set the no execute bit
-    globalPTM.SetPageFlag(usr_data, PT_Flag::UserSuper, false); // Can only be accessed in CPL 0
-    globalPTM.SetPageFlag(usr_data, PT_Flag::ReadWrite, false); // Make the page read only
-    return true;
 }

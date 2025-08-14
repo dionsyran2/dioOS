@@ -17,8 +17,7 @@ unsigned long sys_brk(unsigned long brk){
         void* page = GlobalAllocator.RequestPage();
         if (page == nullptr) return 0; // run out of memory
 
-        task->ptm->UnmapMemory(page);
-        task->ptm->MapMemory((void*)task->brk_end, page);
+        task->ptm->MapMemory((void*)task->brk_end, (void*)globalPTM.getPhysicalAddress(page));
         task->brk_end += 0x1000;
     }
 
@@ -50,7 +49,7 @@ unsigned long sys_mmap(void *addr, size_t length, int prot, int flags, int fd, u
 
         void* page = GlobalAllocator.RequestPage();
         memset(page, 0, 0x1000);
-        ptm->MapMemory(vaddr, page);
+        ptm->MapMemory(vaddr, (void*)globalPTM.getPhysicalAddress(page));
         ptm->SetPageFlag(vaddr, PT_Flag::UserSuper, true);
     }
 

@@ -2,6 +2,7 @@
 #include <syscalls/syscalls.h>
 #include <kernel.h>
 #include <userspace/userspace.h>
+#include <other/ELFLoader.h>
 
 task_t* task_list;
 task_t* idle_task;
@@ -225,6 +226,7 @@ void task_t::exit(int code){
 namespace task_scheduler{
     bool disable_scheduling = true;
     task_t* next_task = nullptr;
+    size_t num_of_tasks = 0;
 
     void idle(){
         while(1) {
@@ -287,6 +289,7 @@ namespace task_scheduler{
             
             ct = ct->next;
         }
+        num_of_tasks++;
     }
 
     void remove_task(task_t* task){
@@ -300,6 +303,7 @@ namespace task_scheduler{
         if (task->next) task->next->previous = task->previous;
 
         // free any allocated memory blah blah blah
+        num_of_tasks--;
     }
 
     task_t* create_process(
@@ -395,6 +399,7 @@ namespace task_scheduler{
         while(task != nullptr){
             if (task->pgid == pid){
                 task->pending_signals |= (1UL << signal);
+                if (task->state == BLOCKED) unblock_task(task);
                 break;
             }
             task = task->next;
@@ -464,9 +469,9 @@ namespace task_scheduler{
         memcpy_simd((void*)task->syscall_stack, (void*)process->syscall_stack, TASK_SCHEDULER_DEFAULT_STACK_SIZE);
 
         for (int i = 0; i < TASK_SCHEDULER_DEFAULT_STACK_SIZE_IN_PAGES; i++){
-            pt->MapMemory((void*)(process->stack + (i * 0x1000)), (void*)(task->stack + (i * 0x1000)));
-            pt->MapMemory((void*)(process->kstack + (i * 0x1000)), (void*)(task->kstack + (i * 0x1000)));
-            pt->MapMemory((void*)(process->syscall_stack + (i * 0x1000)), (void*)(task->syscall_stack + (i * 0x1000)));
+            pt->MapMemory((void*)(process->stack + (i * 0x1000)), (void*)virtual_to_physical(task->stack + (i * 0x1000)));
+            pt->MapMemory((void*)(process->kstack + (i * 0x1000)), (void*)virtual_to_physical(task->kstack + (i * 0x1000)));
+            pt->MapMemory((void*)(process->syscall_stack + (i * 0x1000)), (void*)virtual_to_physical(task->syscall_stack + (i * 0x1000)));
         }
 
         task->stack = process->stack;
@@ -870,9 +875,9 @@ namespace task_scheduler{
         current_task = task;
         _check_for_pending_signals(task);
         if (task->ptm != nullptr){
-            asm volatile ("mov %0, %%cr3" :: "r" (task->ptm->PML4));
+            asm volatile ("mov %0, %%cr3" :: "r" (task->ptm->getPhysicalAddress(task->ptm->PML4)));
         }else{
-            asm volatile ("mov %0, %%cr3" :: "r" (globalPTM.PML4));
+            asm volatile ("mov %0, %%cr3" :: "r" (globalPTM.getPhysicalAddress(globalPTM.PML4)));
         }
 
         write_msr(IA32_FS_BASE, task->fs_base);

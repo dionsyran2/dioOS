@@ -1,59 +1,41 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
-#include "cstr.h"
-#include "multiboot2.h"
-#include "paging/PageFrameAllocator.h"
-#include "paging/PageTableManager.h"
-#include "SimpleFont.h"
-#include "BasicRenderer.h"
-#include "acpi.h"
-#include "pci.h"
-#include "memory/heap.h"
-#include "scheduling/apic/apic.h"
-#include "interrupts/IDT.h"
-#include "interrupts/interrupts.h"
-#include "scheduling/apic/madt.h"
-#include "scheduling/hpet/hpet.h"
-#include "scheduling/task/scheduler.h"
-#include "gdt/gdt.h"
-#include "syscalls/syscalls.h"
+#include <limine.h>
+#include <memory.h>
+#include <paging/PageFrameAllocator.h>
+#include <paging/PageTableManager.h>
+#include <memory/heap.h>
 #include <cpu.h>
-#include <users.h>
+#include <interrupts/IDT.h>
+#include <interrupts/interrupts.h>
+#include <drivers/serial.h>
+#include <gdt/gdt.h>
+#include <uname.h>
+#include <uacpi/uacpi.h>
+#include <uacpi/event.h>
+#include <uacpi/sleep.h>
+#include <uacpi/osi.h>
 
-//Drivers
-#include "drivers/serial.h"
-#include "drivers/audio/HDA.h"
-#include "other/ELFLoader.h"
-#include "drivers/rtc/rtc.h"
-#include "UserInput/ps2.h"
-#include "UserInput/keyboard.h"
-#include "UserInput/mouse.h"
-#include <tty/tty.h>
-#include <session/session.h>
 
-//Defines
-
-struct multiboot_info {
-    uint32_t size;
-    uint32_t reserved;
-    struct multiboot_tag* first;
-};
+// LIMINE
+extern volatile struct limine_framebuffer_request framebuffer_request;
+extern volatile struct limine_hhdm_request hhdm_request;
+extern volatile struct limine_memmap_request memmap_request;
+extern volatile struct limine_kernel_address_request kernel_address_request;
+extern volatile struct limine_module_request  module_request;
+extern volatile struct limine_rsdp_request rsdp_request;
 
 extern uint64_t _KernelStart;
 extern uint64_t _KernelEnd;
-void InitKernel(uint32_t magic, multiboot_info* mb_info_addr);
-void SecondaryKernelInit();
-void Shutdown();
-void Restart();
-extern "C" void SetIDTGate(void* handler, uint8_t entryOffset, uint8_t type_attr, uint8_t selector, IDTR* idtr);
-extern "C" void set_kernel_stack(uint64_t stack, tss_entry_t* tss_entry);
-extern "C" void _main(uint32_t magic, multiboot_info* mb_info_addr);
-void write_tss(BITS64_SSD *g, tss_entry_t* tss_entry);
-extern uint64_t stack_top_usr;
-extern uint64_t stack_top;
-extern bool boolean_flag_1;
+extern IDTR idtr;
 extern tss_entry_t* cpu0_tss_entry;
 extern GDTDescriptor* gdtDescriptor;
-extern "C" void _apmain();
-extern IDTR idtr;
+
+void init_kernel();
+void second_stage_init();
+
+extern "C" void SetIDTGate(void* handler, uint8_t entryOffset, uint8_t type_attr, uint8_t selector, IDTR* idtr);
+void Shutdown();
+void Restart();
+extern "C" void set_kernel_stack(uint64_t stack, tss_entry_t* tss_entry);

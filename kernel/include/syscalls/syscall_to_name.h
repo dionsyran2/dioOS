@@ -69,6 +69,7 @@ inline const char* syscall_to_name(int sysnum){
         case 81: return "fchdir";
         case 83: return "mkdir";
         case 85: return "creat";
+        case 92: return "chown";
         case 96: return "gettimeofday";
         case 102: return "getuid";
         case 104: return "getgid";
@@ -94,6 +95,7 @@ inline const char* syscall_to_name(int sysnum){
         case 217: return "getdents64";
         case 218: return "set_tid_address";
         case 228: return "clock_gettime";
+        case 230: return "clock_nanosleep";
         case 234: return "tgkill";
         case 257: return "openat";
         case 258: return "mkdirat";
@@ -131,7 +133,7 @@ inline void syscall_args(int sysnum, int out[]){
         case 18: out[0] = 1; out[1] = 1; out[2] = 1; out[3] = 1; break;
         case 19: out[0] = 1; out[1] = 1; out[2] = 1; break;
         case 20: out[0] = 1; out[1] = 1; out[2] = 1; break;
-        case 21: out[0] = 1; out[1] = 1; break;
+        case 21: out[0] = 2; out[1] = 1; break;
         case 22: out[0] = 1;break;
         case 23: out[0] = 1; out[1] = 1; out[2] = 1; out[3] = 1; out[4] = 1; break;
         case 27: out[0] = 1; out[1] = 3; out[2] = 1; break;
@@ -151,6 +153,7 @@ inline void syscall_args(int sysnum, int out[]){
         case 81: out[0] = 1; break;
         case 83: out[0] = 2; out[1] = 1; break;
         case 85: out[0] = 2; out[1] = 1; break;
+        case 92: out[0] = 2; out[1] = 3; out[2] = 3; break;
         case 96: out[0] = 1; out[1] = 1; break;
         case 102: break;
         case 104: break;
@@ -172,6 +175,7 @@ inline void syscall_args(int sysnum, int out[]){
         case 218: out[0] = 1; break;
         case 217: out[0] = 1; out[1] = 1; out[2] = 1; break;
         case 228: out[0] = 1; out[1] = 1; break;
+        case 230: out[0] = 3; out[1] = 3; out[2] = 1; out[3] = 1; break;
         case 234: out[0] = 3; out[1] = 3; out[2] = 3; break;
         case 257: out[0] = 1; out[1] = 2; out[2] = 1; out[3] = 1; break;
         case 258: out[0] = 3; out[1] = 2; out[2] = 1; break;

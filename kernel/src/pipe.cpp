@@ -1,6 +1,6 @@
 #include <pipe.h>
 
-int WritePipe(vnode_t* pipe, const char* data, size_t length){
+int64_t WritePipe(vnode_t* pipe, const void* data, size_t length){
     pipe_data* p = (pipe_data*)pipe->misc_data[0];
     spin_lock(&p->lock);
 
@@ -21,30 +21,35 @@ int WritePipe(vnode_t* pipe, const char* data, size_t length){
     return length;
 }
 
-char* ReadPipe(vnode_t* pipe, size_t* length){
-    while (!pipe->data_read) __asm__("pause");
+int64_t ReadPipe(vnode_t* pipe, void* buffer, size_t cnt){
+    while (!pipe->data_read) asm ("pause");
     pipe_data* p = (pipe_data*)pipe->misc_data[0];
     spin_lock(&p->lock);
 
-    size_t bsz = p->offset_in_buffer;
-    char* out = new char[bsz];
-    memcpy(out, p->data, bsz);
-    memset(p->data, 0, bsz);
-    p->offset_in_buffer = 0;
-    *length = bsz;
+    size_t offset = p->offset_in_buffer;
+    size_t to_read = offset;
+    if (offset == 0 || cnt == 0) {spin_unlock(&p->lock); return 0;}
+    if (to_read > cnt) to_read = cnt;
+    memcpy(buffer, p->data, to_read);
 
-    pipe->data_read = false;
+    if (to_read < offset){
+        memmove(p->data, p->data + to_read, offset - to_read);
+    }
+    
+    p->offset_in_buffer -= to_read;
+
+    if (p->offset_in_buffer == 0) pipe->data_read = false;
 
     spin_unlock(&p->lock);
-    return out;
+    return to_read;
 }
 
-void* default_pipe_load(size_t* cnt, vnode* this_node){
-    return ReadPipe(this_node, cnt);
+int64_t default_pipe_load(void* buffer, size_t cnt, size_t offset, vnode* this_node){
+    return ReadPipe(this_node, buffer, cnt);
 }
 
-int default_pipe_write(const char* data, size_t length, vnode_t* this_node){
-    return WritePipe(this_node, data, length);
+int64_t default_pipe_write(const void* data, size_t cnt, size_t offset, vnode_t* this_node){
+    return WritePipe(this_node, data, cnt);
 }
 
 int delete_pipe_data(vnode_t* pipe, size_t length){
@@ -70,12 +75,14 @@ vnode_t* CreatePipe(const char* name, vnode_t* parent){
     node->ops.read = default_pipe_load;
     node->ops.write = default_pipe_write;
     node->parent = parent;
+    node->data_read = false;
 
     
     memset(node->misc_data[0], 0, sizeof(pipe_data));
 
     strcpy(node->name, (char*)name);
 
+    spin_unlock(&((pipe_data*)node->misc_data[0])->lock);
     return node;
 }
 

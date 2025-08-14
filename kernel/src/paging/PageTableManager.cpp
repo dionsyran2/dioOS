@@ -15,19 +15,19 @@ void PageTableManager::ClonePTM(PageTableManager* ptm){
         auto* PDPEntry = &PML4->entries[PDP_i];
         if (!PDPEntry->GetFlag(PT_Flag::Present)) continue;
 
-        auto* PDP = (PageTable*)PDPEntry->GetAddress();
+        auto* PDP = (PageTable*)physical_to_virtual(PDPEntry->GetAddress());
 
         for (int PD_i = 0; PD_i < 512; PD_i++){
             auto* PDEntry = &PDP->entries[PD_i];
             if (!PDEntry->GetFlag(PT_Flag::Present)) continue;
 
-            auto* PD = (PageTable*)PDEntry->GetAddress();
+            auto* PD = (PageTable*)physical_to_virtual(PDEntry->GetAddress());
 
             for (int PT_i = 0; PT_i < 512; PT_i++){
                 auto* PTEntry = &PD->entries[PT_i];
                 if (!PTEntry->GetFlag(PT_Flag::Present)) continue;
 
-                auto* PT = (PageTable*)PTEntry->GetAddress();
+                auto* PT = (PageTable*)physical_to_virtual(PTEntry->GetAddress());
 
                 uint64_t virt_base =
                     ((uint64_t)PDP_i << 39) |
@@ -60,12 +60,12 @@ void PageTableManager::SetMemoryVal(void* virtualMemory, uint64_t val){
 
         memset(PDP, 0, 0x1000);
 
-        PDPEntry->SetAddress((uint64_t)PDP);
+        PDPEntry->SetAddress(virtual_to_physical((uint64_t)PDP));
         PDPEntry->SetFlag(PT_Flag::Present, true);
         PDPEntry->SetFlag(PT_Flag::ReadWrite, true);
         PDPEntry->SetFlag(PT_Flag::UserSuper, true);
     }else{
-        PDP = (PageTable*)PDPEntry->GetAddress();
+        PDP = (PageTable*)physical_to_virtual(PDPEntry->GetAddress());
     }
 
     PageTable* PD = nullptr;
@@ -77,12 +77,12 @@ void PageTableManager::SetMemoryVal(void* virtualMemory, uint64_t val){
 
         memset(PD, 0, 0x1000);
 
-        PDEntry->SetAddress((uint64_t)PD);
+        PDEntry->SetAddress(virtual_to_physical((uint64_t)PD));
         PDEntry->SetFlag(PT_Flag::Present, true);
         PDEntry->SetFlag(PT_Flag::ReadWrite, true);
         PDEntry->SetFlag(PT_Flag::UserSuper, true);
     }else{
-        PD = (PageTable*)PDEntry->GetAddress();
+        PD = (PageTable*)physical_to_virtual(PDEntry->GetAddress());
     }
 
     PageTable* PT = nullptr;
@@ -94,12 +94,12 @@ void PageTableManager::SetMemoryVal(void* virtualMemory, uint64_t val){
 
         memset(PT, 0, 0x1000);
 
-        PTEntry->SetAddress((uint64_t)PT);
+        PTEntry->SetAddress(virtual_to_physical((uint64_t)PT));
         PTEntry->SetFlag(PT_Flag::Present, true);
         PTEntry->SetFlag(PT_Flag::ReadWrite, true);
         PTEntry->SetFlag(PT_Flag::UserSuper, true);
     }else{
-        PT = (PageTable*)PTEntry->GetAddress();
+        PT = (PageTable*)physical_to_virtual(PTEntry->GetAddress());
     }
 
 
@@ -123,12 +123,12 @@ void PageTableManager::MapMemory(void* virtualMemory, void* physicalMemory){
 
         memset(PDP, 0, 0x1000);
 
-        PDPEntry->SetAddress((uint64_t)PDP);
+        PDPEntry->SetAddress(virtual_to_physical((uint64_t)PDP));
         PDPEntry->SetFlag(PT_Flag::Present, true);
         PDPEntry->SetFlag(PT_Flag::ReadWrite, true);
         PDPEntry->SetFlag(PT_Flag::UserSuper, true);
     }else{
-        PDP = (PageTable*)PDPEntry->GetAddress();
+        PDP = (PageTable*)physical_to_virtual(PDPEntry->GetAddress());
     }
 
     PageTable* PD = nullptr;
@@ -140,12 +140,12 @@ void PageTableManager::MapMemory(void* virtualMemory, void* physicalMemory){
 
         memset(PD, 0, 0x1000);
 
-        PDEntry->SetAddress((uint64_t)PD);
+        PDEntry->SetAddress(virtual_to_physical((uint64_t)PD));
         PDEntry->SetFlag(PT_Flag::Present, true);
         PDEntry->SetFlag(PT_Flag::ReadWrite, true);
         PDEntry->SetFlag(PT_Flag::UserSuper, true);
     }else{
-        PD = (PageTable*)PDEntry->GetAddress();
+        PD = (PageTable*)physical_to_virtual(PDEntry->GetAddress());
     }
 
     PageTable* PT = nullptr;
@@ -157,12 +157,12 @@ void PageTableManager::MapMemory(void* virtualMemory, void* physicalMemory){
 
         memset(PT, 0, 0x1000);
 
-        PTEntry->SetAddress((uint64_t)PT);
+        PTEntry->SetAddress(virtual_to_physical((uint64_t)PT));
         PTEntry->SetFlag(PT_Flag::Present, true);
         PTEntry->SetFlag(PT_Flag::ReadWrite, true);
         PTEntry->SetFlag(PT_Flag::UserSuper, true);
     }else{
-        PT = (PageTable*)PTEntry->GetAddress();
+        PT = (PageTable*)physical_to_virtual(PTEntry->GetAddress());
     }
 
 
@@ -189,12 +189,12 @@ void PageTableManager::SetPageFlag(void* virtualMemory, PT_Flag flag, bool statu
 
         memset(PDP, 0, 0x1000);
 
-        PDPEntry->SetAddress((uint64_t)PDP);
+        PDPEntry->SetAddress(virtual_to_physical((uint64_t)PDP));
         PDPEntry->SetFlag(PT_Flag::Present, true);
         PDPEntry->SetFlag(PT_Flag::ReadWrite, true);
         PDPEntry->SetFlag(PT_Flag::UserSuper, true);
     }else{
-        PDP = (PageTable*)PDPEntry->GetAddress();
+        PDP = (PageTable*)physical_to_virtual(PDPEntry->GetAddress());
     }
 
     PageTable* PD = nullptr;
@@ -206,12 +206,12 @@ void PageTableManager::SetPageFlag(void* virtualMemory, PT_Flag flag, bool statu
 
         memset(PD, 0, 0x1000);
 
-        PDEntry->SetAddress((uint64_t)PD);
+        PDEntry->SetAddress(virtual_to_physical((uint64_t)PD));
         PDEntry->SetFlag(PT_Flag::Present, true);
         PDEntry->SetFlag(PT_Flag::ReadWrite, true);
         PDEntry->SetFlag(PT_Flag::UserSuper, true);
     }else{
-        PD = (PageTable*)PDEntry->GetAddress();
+        PD = (PageTable*)physical_to_virtual(PDEntry->GetAddress());
     }
 
     PageTable* PT = nullptr;
@@ -223,12 +223,12 @@ void PageTableManager::SetPageFlag(void* virtualMemory, PT_Flag flag, bool statu
 
         memset(PT, 0, 0x1000);
 
-        PTEntry->SetAddress((uint64_t)PT);
+        PTEntry->SetAddress(virtual_to_physical((uint64_t)PT));
         PTEntry->SetFlag(PT_Flag::Present, true);
         PTEntry->SetFlag(PT_Flag::ReadWrite, true);
         PTEntry->SetFlag(PT_Flag::UserSuper, true);
     }else{
-        PT = (PageTable*)PTEntry->GetAddress();
+        PT = (PageTable*)physical_to_virtual(PTEntry->GetAddress());
     }
 
     PageDirectoryEntry* PEntry = &PT->entries[indexer.P_i];
@@ -243,19 +243,19 @@ void PageTableManager::UnmapMemory(void* virtualMemory){
     PDE = PML4->entries[indexer.PDP_i];
     PageTable* PDP;
     if (!PDE.GetFlag(PT_Flag::Present)) return;
-    PDP = (PageTable*)((uint64_t)PDE.GetAddress());
+    PDP = (PageTable*)physical_to_virtual(PDE.GetAddress());
     
     
     PDE = PDP->entries[indexer.PD_i];
     PageTable* PD;
     if (!PDE.GetFlag(PT_Flag::Present)) return;
-    PD = (PageTable*)((uint64_t)PDE.GetAddress());
+    PD = (PageTable*)physical_to_virtual(PDE.GetAddress());
     
 
     PDE = PD->entries[indexer.PT_i];
     PageTable* PT;
     if (!PDE.GetFlag(PT_Flag::Present)) return;
-    PT = (PageTable*)((uint64_t)PDE.GetAddress());
+    PT = (PageTable*)physical_to_virtual(PDE.GetAddress());
     
 
     PDE = PT->entries[indexer.P_i];
@@ -273,19 +273,19 @@ bool PageTableManager::isMapped(void* vaddr){
     PDE = PML4->entries[indexer.PDP_i];
     PageTable* PDP;
     if (!PDE.GetFlag(PT_Flag::Present)) return false;
-    PDP = (PageTable*)((uint64_t)PDE.GetAddress());
+    PDP = (PageTable*)physical_to_virtual(PDE.GetAddress());
     
     
     PDE = PDP->entries[indexer.PD_i];
     PageTable* PD;
     if (!PDE.GetFlag(PT_Flag::Present)) return false;
-    PD = (PageTable*)((uint64_t)PDE.GetAddress());
+    PD = (PageTable*)physical_to_virtual(PDE.GetAddress());
     
 
     PDE = PD->entries[indexer.PT_i];
     PageTable* PT;
     if (!PDE.GetFlag(PT_Flag::Present)) return false;
-    PT = (PageTable*)((uint64_t)PDE.GetAddress());
+    PT = (PageTable*)physical_to_virtual(PDE.GetAddress());
     
 
     PDE = PT->entries[indexer.P_i];
@@ -299,21 +299,21 @@ uint64_t PageTableManager::getPhysicalAddress(void* vaddr){
     PDE = PML4->entries[indexer.PDP_i];
     PageTable* PDP;
     if (!PDE.GetFlag(PT_Flag::Present)) return false;
-    PDP = (PageTable*)((uint64_t)PDE.GetAddress());
+    PDP = (PageTable*)physical_to_virtual(PDE.GetAddress());
     
     
     PDE = PDP->entries[indexer.PD_i];
     PageTable* PD;
     if (!PDE.GetFlag(PT_Flag::Present)) return false;
-    PD = (PageTable*)((uint64_t)PDE.GetAddress());
+    PD = (PageTable*)physical_to_virtual(PDE.GetAddress());
     
 
     PDE = PD->entries[indexer.PT_i];
     PageTable* PT;
     if (!PDE.GetFlag(PT_Flag::Present)) return false;
-    PT = (PageTable*)((uint64_t)PDE.GetAddress());
+    PT = (PageTable*)physical_to_virtual(PDE.GetAddress());
     
 
     PDE = PT->entries[indexer.P_i];
-    return PDE.GetFlag(PT_Flag::Present) ? PDE.GetAddress() : NULL;
+    return PDE.GetFlag(PT_Flag::Present) ? PDE.GetAddress() : 0;
 }

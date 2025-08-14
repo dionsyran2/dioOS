@@ -26,13 +26,14 @@ struct vnode;
 struct vnode_ops {
     int (*open)(vnode* node);
     int (*close)(vnode* node);
-    void* (*read)(size_t* cnt, vnode* this_node);
-    int (*write)(const char* txt, size_t length, vnode* this_node);
+    int64_t (*read)(void* buffer, size_t cnt, size_t offset, vnode* this_node);
+    int64_t (*write)(const void* buffer, size_t cnt, size_t offset, vnode* this_node);
+    int64_t (*truncate)(uint64_t size, vnode* this_node);
     int (*mkdir)(const char* fn, vnode* this_node);
     int (*creat)(const char* fn, vnode* this_node);
-    int (*read_dir)(vnode** out_list, size_t* out_count, vnode* this_node);
+    int (*read_dir)(vnode** out_list, vnode* this_node);
     int (*iocntl)(int op, char* argp, vnode* this_node);
-    //save_on_disk()
+    int (*save_entry)(vnode* this_node);
     // ...
 };
 
@@ -41,9 +42,11 @@ typedef struct vnode{
     vnode* parent;
     VNODE_TYPE type;
     struct vnode_ops ops;
+
     char name[256];
-        
-    vnode* children;
+    char pathname[512];
+
+    vnode* static_children;
     uint16_t child_cnt;
 
     uint16_t perms;
@@ -51,7 +54,7 @@ typedef struct vnode{
     uint16_t uid;
     uint16_t gid;
 
-    uint32_t size;
+    uint64_t size;
     uint64_t last_accessed;
     uint64_t last_modified;
     uint64_t creation_time;
@@ -60,14 +63,22 @@ typedef struct vnode{
     uint32_t fs_inode;
 
     uint32_t flags;
-    
+
+    uint8_t* cache;
+    uint8_t* write_cache;
+    uint64_t write_cache_size;
+    uint64_t write_cache_size_in_pages;
+    uint64_t write_cache_offset;
+
     bool data_read;
     bool data_write;
     bool is_tty;
 
-    uint8_t* data;
-    uint32_t data_size;
-
+    bool edited;
+    bool bypass_write_cache;
+    
+    bool is_static;
+    
     uint16_t ref_cnt;
 
     void* misc_data[4];
@@ -76,10 +87,13 @@ typedef struct vnode{
 
     int open();
     int close();
-    int read(size_t* cnt, void** buffer);
+    int64_t read(void* buffer, size_t cnt, size_t offset = 0);
+    int64_t write(const void* buffer, size_t cnt, size_t offset = 0);
+    int64_t truncate(size_t size);
     int iocntl(int op, char* argp);
-    int write(const char* txt, size_t length);
     int mkfile(const char* fn, bool dir);
+    int read_dir(vnode** out);
+    int save_entry();
 } vnode_t;
 
 struct vblk;

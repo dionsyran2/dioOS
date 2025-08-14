@@ -105,7 +105,9 @@ int sys_gettimeofday(struct timeval* tv, struct timezone* tz){
     return 0;
 }
 
-
+int sys_clock_nanosleep(int clockid, int flags, const struct timespc *t, struct timespc* remain){
+    return sys_nanosleep(t, remain);
+}
 
 void register_syscall(){
     register_thread_syscalls();
@@ -117,6 +119,7 @@ void register_syscall(){
     register_syscall(SYSCALL_NANOSLEEP, (syscall_handler_t)sys_nanosleep);
     register_syscall(SYSCALL_TIME, (syscall_handler_t)sys_time);
     register_syscall(SYSCALL_GETTIMEOFDAY, (syscall_handler_t)sys_gettimeofday);
+    register_syscall(SYSCALL_CLOCKNANOSLEEP, (syscall_handler_t)sys_clock_nanosleep);
 
 
     int cnt = 0;

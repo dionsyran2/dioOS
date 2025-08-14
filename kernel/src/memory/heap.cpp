@@ -2,7 +2,6 @@
 #include <memory/heap.h>
 #include <paging/PageTableManager.h>
 #include <paging/PageFrameAllocator.h>
-#include <BasicRenderer.h>
 #include <scheduling/task/scheduler.h>
 #include <scheduling/lock/spinlock.h>
 
@@ -29,7 +28,7 @@ void InitializeHeap(void* heapAddr, size_t pageCount){
         }
         memset(page, 0, 0x1000);
         globalPTM.UnmapMemory(page); // remove the physical (1:1) mapping
-        globalPTM.MapMemory(pos, page); //Map it to the heap address
+        globalPTM.MapMemory(pos, (void*)virtual_to_physical((uint64_t)page)); //Map it to the heap address
         heapFree += 0x1000;
         heapSize += 0x1000;
 
@@ -77,7 +76,6 @@ extern "C" void free(void* address){
     segment->CombineForward();
     segment->CombineBackward();
     
-    //memset((void*)((uint64_t)segment + sizeof(HeapSegHdr)), 0, segment->length - sizeof(HeapSegHdr));
 
 }
 
@@ -165,29 +163,19 @@ void ExpandHeap(size_t length){
     HeapSegHdr* newSeg = (HeapSegHdr*)heapEnd;
     for(size_t i = 0; i < pageCount; i++){
         void* page = GlobalAllocator.RequestPage();
-        globalPTM.UnmapMemory(page); 
-        globalPTM.MapMemory(heapEnd, page);
+        memset(page, 0, 0x1000);
+        globalPTM.UnmapMemory(page); // remove the physical (1:1) mapping
+        globalPTM.MapMemory(heapEnd, (void*)virtual_to_physical((uint64_t)page)); //Map it to the heap address
 
         task_t* task = task_list;
         while(task != nullptr){
             if (task->ptm != nullptr){
-                task->ptm->UnmapMemory(page); 
-                task->ptm->MapMemory(heapEnd, page);
+                task->ptm->MapMemory(heapEnd, (void*)virtual_to_physical((uint64_t)page));
             }
 
             task = task->next;
         }
-        /*for (int p = 0; p < taskScheduler::numOfTaskLists; p++){
-            taskScheduler::tasklist_t* list = &taskScheduler::tasklists[p];
-            
-            for (int i = 0; i < list->numOfTasks; i++){
-                taskScheduler::task_t* task = list->tasks[i];
 
-                if (task->valid == false) continue;
-                if (task->ptm == nullptr) continue;
-                task->ptm->MapMemory(heapEnd, page);
-            }
-        }*/
         heapEnd = (void*)((size_t)heapEnd + 0x1000);
     }
 

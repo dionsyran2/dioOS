@@ -14,14 +14,20 @@ template<typename T>
 
         void grow() {
             size_t newCapacity = _capacity == 0 ? 2 : _capacity * 2;
-            T* newData = (T*)realloc(data, newCapacity * sizeof(T));
-            if (!newData) return; // handle out-of-memory if needed
+            T* newData = (T*)malloc(newCapacity * sizeof(T));
+            memset(newData, 0, newCapacity * sizeof(T));
+            if (!newData) return;
+
+            if (data != nullptr) {memcpy(newData, data, _capacity * sizeof(T)); free(data);}
             data = newData;
             _capacity = newCapacity;
         }
 
     public:
-        Vector() {}
+        Vector() {
+            data = nullptr;
+            _capacity = 0;
+        }
         ~Vector() {
             if (data) free(data);
         }
@@ -36,7 +42,7 @@ template<typename T>
         }
 
         T& operator[](size_t index) {
-            return data[index]; // No bounds checking!
+            return data[index];
         }
 
         const T& operator[](size_t index) const {

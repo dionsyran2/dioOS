@@ -1,63 +1,48 @@
-/*
-%h 8-bit Hex
-%hh 16-bit Hex
-%l 64-bit Hex
-
-%d 32 bit Int
-
-*/
-
 #pragma once
-#include "math.h"
-#include "multiboot2.h"
-#include "SimpleFont.h"
+#include <math.h>
+#include <SimpleFont.h>
 #include <stddef.h>
 #include <stdint.h>
-#include "cstr.h"
-//#include "UserInput/mouse.h"
-#include "memory/heap.h"
+#include <cstr.h>
+#include <memory/heap.h>
 #include <stdarg.h>
+#include <drivers/framebuffer/framebuffer.h>
+#include <rendering/ttf.h>
+#include <drivers/serial.h>
 
-#include "drivers/serial.h"
+#define FONT_HEIGHT 16
 
 class BasicRenderer{
     public:
-    uint32_t MouseCursorBuffer[16 * 16];
-    uint32_t MouseCursorBufferAfter[16 * 16];
-    BasicRenderer(struct multiboot_tag_framebuffer* targetFramebuffer, PSF1_FONT* PSF1_Font);
+    display* screen;
+    uint32_t width;
+    uint32_t height;
+    uint8_t font_height;
     Point cursorPos;
-    void* backbuffer;
-    struct multiboot_tag_framebuffer* targetFramebuffer;
-    PSF1_FONT* PSF1_Font;
+    PSF1_FONT* font;
+
+    BasicRenderer(display* screen, void* ttf_font);
+    void draw_char(unsigned int color, wchar_t chr, unsigned int xOff, unsigned int yOff);
+    void print(unsigned int color, const wchar_t* str);
     void print(unsigned int color, const char* str);
-    void printf(unsigned int color, const char* str, ...);
-    void printf(const char* str, ...);
+    void printfva(uint32_t color, const wchar_t* str, va_list args);
     void printfva(uint32_t color, const char* fmt, va_list args);
-    void print(const char* str);
-    void srand_custom(unsigned int initialSeed);
-    void updateScreen();
-    unsigned int rand_custom();
-    unsigned int randHexColor();
-    void drawChar(unsigned int color, char chr, unsigned int xOff, unsigned int yOff);
-    void DrawPixels(unsigned int xStart, unsigned int xEnd, unsigned int yStart, unsigned int yEnd, unsigned int color);
-    void delay(unsigned long milliseconds);
-    void DrawOverlayMouseCursor(uint8_t* MouseCursor, Point Position, uint32_t Colour);
-    void ClearMouseCursor(uint8_t* MouseCursor, Point Position);
-    uint32_t GetPix(uint32_t X, uint32_t Y);
-    void PutPix(uint32_t X, uint32_t Y, uint32_t Colour);
-    void Clear(unsigned int color);
-    void ClearChar(unsigned int color);
+    uint16_t read_unicode_table(uint32_t codepoint);
     void HandleScrolling();
+    void DrawBMPScaled(int dstX, int dstY, int targetW, int targetH, uint8_t* bmpData);
+
     bool status = false;
     void Set(bool b);
+    void Clear(unsigned int color);
     
-    void PutPixFB(uint32_t X, uint32_t Y, uint32_t Colour);
 
     //tty functions
-    void draw_char_tty(uint32_t color, uint32_t bg, char chr, unsigned int xOff, unsigned int yOff, bool underline);
+    void draw_char_tty(uint32_t color, uint32_t bg, wchar_t chr, unsigned int xOff, unsigned int yOff, bool underline);
     void draw_cursor(uint32_t x, uint32_t y, uint32_t clr);
     void clear_cursor(uint32_t x, uint32_t y);
 };
+void kprintf(unsigned int color, const char* str, ...);
+void kprintf(const char* str, ...);
 
 #pragma pack(push, 1)
 typedef struct {
@@ -85,7 +70,6 @@ typedef struct {
 
 void kprintf(unsigned int color, const char* str, ...);
 void kprintf(const char* str, ...);
-
-void DrawBMPScaled(int dstX, int dstY, int targetW, int targetH, uint8_t* bmpData, void* buffer, uint64_t pitch);
-
+void kprintf(unsigned int color, const wchar_t* str, ...);
+void kprintf(const wchar_t* str, ...);
 extern BasicRenderer* globalRenderer;

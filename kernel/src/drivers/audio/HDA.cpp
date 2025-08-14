@@ -21,12 +21,10 @@ void HDA::Reset()
 { // Perform a cold reset
     volatile uint32_t *control = (volatile uint32_t *)(bar0 + 0x08);
     *control &= ~0x01;
-    while (*control & 0x01)
-        ;
+    while (*control & 0x01);
     Sleep(1);
     *control |= 0x01;
-    while ((*control & 0x01) == 0)
-        ;
+    while ((*control & 0x01) == 0);
     Sleep(1);
 }
 
@@ -52,22 +50,16 @@ void HDA::ResetCORB()
 {
     volatile uint8_t *ctrl = (volatile uint8_t *)(bar0 + 0x4C);
     *ctrl &= ~0b10;
-    while (*ctrl & 0b10)
-        ;
-    for (int i = 0; i < 10000; i++)
-        ;
+    while (*ctrl & 0b10);
+    Sleep(1);
 
     uint8_t *size = (uint8_t *)(bar0 + 0x4E);
     uint8_t entries2 = (*size >> 4) & 0b0001;
     uint8_t entries16 = (*size >> 4) & 0b0010;
     uint8_t entries256 = (*size >> 4) & 0b0100;
 
-    //kprintf("[HDA DRIVER] CORB SUPPORTED SIZE: [256]: 0x%hh| [16]: 0x%hh | [2]:0x%hh | [RAW]: 0x%hh\n", entries256, entries16, entries2, *size & 0xFF);
-
     if (entries256 == 1 && (entries16 == 1 || entries2 == 1))
     { // We need to check if there is at least one more supported. If only one is then the register is read only
-
-       //kprintf("[HDA DRIVER] Setting CORB Size to 0b10 (256 Entries)\n");
 
         *size &= ~0b11;
         *size |= 0b10;
@@ -75,30 +67,33 @@ void HDA::ResetCORB()
     else if (entries16 == 1 && entries2 == 1)
     { // We need to check if there is at least one more supported. If only one is then the register is read only
 
-       //kprintf("[HDA DRIVER] Setting CORB Size to 0b01 (16 Entries)\n");
-
         *size &= ~0b11;
         *size |= 0b01;
     } // If none of those are true, then there is only one size supported, the register is Read Only and the value is set to 0 (2 entries)
 
     uint64_t mem = (uint64_t)GlobalAllocator.RequestPage(); // Allocate memory for the corb commands
     memset((void *)mem, 0, 0x2000);
-    CORB = (uint64_t *)mem;
+    CORB = (uint64_t*)mem;
+
     volatile uint32_t *memLow = (volatile uint32_t *)(bar0 + 0x40);
     volatile uint32_t *memHigh = (volatile uint32_t *)(bar0 + 0x44);
-    *memLow = (uint32_t)(mem); // Set the low part of the memory address
-    uint32_t *bar0 = (uint32_t *)(bar0);
-    uint32_t Cap = *bar0;
+
+    mem = globalPTM.getPhysicalAddress((void*)mem);
+
+    *memLow = (uint32_t)(mem & 0xFFFFFFFF); // Set the low part of the memory address
+
+    uint32_t Cap = *(uint32_t*)bar0;
+
     if (Cap & 0x1)
     {
-        *memHigh = (uint32_t)((mem >> 32)); // Set the high part of the memory address
+        *memHigh = (uint32_t)((mem >> 32) & 0xFFFFFFFF); // Set the high part of the memory address
     }
-    //kprintf("[HDA DRIVER] CORB Low: [%x]/[%x] | CORB High: [%x]/[%x]\n", (uint32_t)(mem), *memLow, (uint32_t)((mem >> 32)), *memHigh);
 
     uint16_t *CORBRP = (uint16_t *)(bar0 + 0x4A);
     *CORBRP |= (1 << 15);
-    while(!(*CORBRP & (1 << 15)));
-    Sleep(10);
+
+    while((*CORBRP) & (1 << 15) == 0);
+    Sleep(1);
     *CORBRP &= ~(1 << 15);
 
     volatile uint16_t *writeptr = (volatile uint16_t *)(bar0 + 0x48);
@@ -113,42 +108,42 @@ void HDA::ResetRIRB()
 {
     volatile uint8_t *ctrl = (volatile uint8_t *)(bar0 + 0x5C);
     *ctrl &= ~0b10;
-    while (*ctrl & 0b10)
-        ;
+    while (*ctrl & 0b10);
 
     uint8_t *size = (uint8_t *)(bar0 + 0x5E);
     uint8_t entries2 = (*size >> 4) & 0b0001;
     uint8_t entries16 = (*size >> 4) & 0b0010;
     uint8_t entries256 = (*size >> 4) & 0b0100;
-    //kprintf("[HDA DRIVER] RIRB SUPPORTED SIZE: [256]: 0x%hh| [16]: 0x%hh | [2]: 0x%hh | [RAW]: 0x%hh\n", entries256, entries16, entries2, *size);
+
     if (entries256 == 1 && (entries16 == 1 || entries2 == 1))
     { // We need to check if there is at least one more supported. If only one is then the register is read only
-       //kprintf("[HDA DRIVER] Setting RIRB Size to 0b10 (256 Entries)\n");
         *size &= ~0b11;
         *size |= 0b10;
     }
     else if (entries16 == 1 && entries2 == 1)
-    { // We need to check if there is at least one more supported. If only one is then the register is read only
-       //kprintf("[HDA DRIVER] Setting RIRB Size to 0b01 (16 Entries)\n");
+    {
         *size &= ~0b11;
         *size |= 0b01;
     } // If none of those are true, then there is only one size supported, the register is Read Only and the value is set to 0 (2 entries)
 
     uint64_t mem = (uint64_t)GlobalAllocator.RequestPages((uint32_t)2); // Allocate memory for the RIRB
     memset((void *)mem, 0, 0x2000);
-    if ((mem & 0xFF) != 0)
-    {
-       //kprintf("[HDA DRIVER] ERROR: CORB buffer is not 256-byte aligned!\n");
-    }
+
     volatile uint32_t *memLow = (volatile uint32_t *)(bar0 + 0x50);
     volatile uint32_t *memHigh = (volatile uint32_t *)(bar0 + 0x54);
+    RIRB = (uint64_t *)mem;
+
+
+    mem = globalPTM.getPhysicalAddress((void*)mem);
+
     *memLow = (uint32_t)(mem); // Set the low part of the memory address
+
     uint32_t Cap = *(uint32_t*)bar0;
     if (Cap & 0x1)
     {
         *memHigh = (uint32_t)((mem >> 32)); // Set the high part of the memory address
     }
-    RIRB = (uint64_t *)mem;
+
     
 
     volatile uint16_t *writeptr = (volatile uint16_t *)(bar0 + 0x58);
@@ -644,8 +639,10 @@ void HDA::Prepare(){
     bd_list = (BufferDescriptor*)GlobalAllocator.RequestPage();
     memset(bd_list, 0, 0x1000);
 
-    *(uint32_t *)(Stream + 0x18) = (uint32_t)(uint64_t)bd_list;
-    *(uint32_t *)(Stream + 0x1C) = (uint32_t)((uint64_t)bd_list >> 32);
+    uint64_t bd_list_physical = globalPTM.getPhysicalAddress(bd_list);
+
+    *(uint32_t *)(Stream + 0x18) = (uint32_t)bd_list_physical;
+    *(uint32_t *)(Stream + 0x1C) = (uint32_t)(bd_list_physical >> 32);
     *(uint32_t *)(Stream + 0x08) = FRAMES_PER_BD * BD_COUNT * selected_frame_size;
     *(uint16_t *)(Stream + 0x0C) = BD_COUNT - 1;
     //kprintf("DAC CTRL: %x, DAC FORMAT: %x, PIN CONTROL: %x\n", SRCMD(0, hda_output_amp_node_number, 0xF06, 0), SRCMD(0, hda_output_amp_node_number, 0xA00, 0), SRCMD(0, 33, 0xF07, 0));
@@ -682,12 +679,13 @@ uint32_t HDA::PlaySample(uint8_t* samples, size_t sample_cnt){
         // Prefill
         uint8_t *Stream = (uint8_t *)(bar0 + 0x80 + (0x20 * InStreams));
         uint64_t dma_buffer = (uint64_t)GlobalAllocator.RequestPages(DIV_ROUND_UP(FRAMES_PER_BD * BD_COUNT * selected_frame_size, 0x1000));
+        dma_buffer = virtual_to_physical(dma_buffer);
         for (int i = 0; i < BD_COUNT; i++){
             bd_list[i].address = dma_buffer;
             bd_list[i].size = FRAMES_PER_BD * selected_frame_size;
             dma_buffer += bd_list[i].size;
             bd_list[i].IOC = ((i + 1) % INTERRUPT_FREQ) == 0 ? 1 : 0;
-            memcpy_simd((void*)bd_list[i].address, (void*)Buffer[BufferRP], bd_list[i].size);
+            memcpy_simd((void*)physical_to_virtual(bd_list[i].address), (void*)Buffer[BufferRP], bd_list[i].size);
             BufferRP++;
         }
         next_bd_refill = 0;
@@ -720,14 +718,14 @@ void hda_tsk(HDA* h){
         if (hda->BufferWP == (hda->BufferRP + INTERRUPT_FREQ) || hda->BufferWP == hda->BufferRP) hda->refill_needeed = true; // keep it filled for the next iteration
         while((*(Stream + 0x03) & 0xF) == 0){
             hda->hda_task->counter = 0;
-            __asm__ __volatile__ ("int $0x23");
+            //__asm__ __volatile__ ("int $0x23");
         }
 
         hda->hda_task->counter = 10;
         int last_bd = hda->next_bd_refill + INTERRUPT_FREQ;
         for (int i = hda->next_bd_refill; i < last_bd; i++){
             while (hda->BufferWP == hda->BufferRP) hda->refill_needeed = true;
-            memcpy_simd((void*)hda->bd_list[i].address, (void*)hda->Buffer[hda->BufferRP], hda->bd_list[i].size);
+            memcpy_simd((void*)physical_to_virtual(hda->bd_list[i].address), (void*)hda->Buffer[hda->BufferRP], hda->bd_list[i].size);
             hda->bd_list[i].IOC = ((i + 1) % INTERRUPT_FREQ) == 0 ? 1 : 0;
             hda->BufferRP++;
             hda->next_bd_refill++;
@@ -947,27 +945,21 @@ HDA::HDA(PCI::PCIDeviceHeader *pciHdr)
         bar0 += ((uint64_t)hdr->BAR1) << 32;
     }
 
-    globalPTM.MapMemory((void*)bar0, (void*)bar0);
+    void* physical = (void*)bar0;
+    bar0 = physical_to_virtual(bar0);
+
+    globalPTM.MapMemory((void*)bar0, physical);
     globalPTM.SetPageFlag((void*)bar0, PT_Flag::CacheDisabled, true);
-   //kprintf("bar0: %x bar1: %x\n", hdr->BAR0, hdr->BAR1);
-   //kprintf("%llx\n", (uint64_t)bar0);
-   //kprintf("4-byte read at the ba: 0x%x\n", *(uint32_t*)bar0);
+   
     uint32_t Cap = *(uint32_t*)bar0;
     OutStreams = (Cap >> 8) & 0xF;
     InStreams = (Cap >> 12) & 0xF;
     BiStreams = (Cap >> 3) & 0b11111;
-   //kprintf("64 Bit Addressing Support: %hh | OUT: %hh | IN: %hh | BI: %hh\n", Cap & 0x1, OutStreams, InStreams, BiStreams);
-   //kprintf("Spec version %d.%d\n", *(uint8_t*)(bar0 + 0x3), *(uint8_t*)(bar0 + 0x2));
-    // SET IRQ ETC...
 
     Reset();
-
-
-
     ResetCORB();
     ResetRIRB();
     EnumerateCodecs();
-    //BDL = (uint8_t *)GlobalAllocator.RequestPages((uint16_t)10);
 
     bool has_output = true;
     if (pin_speaker_default_node_number != 0)
@@ -1105,14 +1097,18 @@ int hda_ioctl(int op, char* argp, vnode_t* node){
             break;
         }
         case SNDRV_CTL_IOCTL_ELEM_LIST: {
-            struct snd_ctl_elem_list* list = (struct snd_ctl_elem_list*)arg;
-            list->used = 1;
+            serialf("%llx %llx\n", argp, arg);
+            struct snd_ctl_elem_list* list = (struct snd_ctl_elem_list*)argp;
             list->count = 1;
-            list->pids[0].iface = 0;
-            list->pids[0].device = hda->card_num;
-            list->pids[0].subdevice = 0;
-            list->pids[0].index = 0;
-            strcpy((char*)list->pids[0].name, "Master");
+            list->used = 0;
+            if (list->space > 0){
+                list->used = 1;
+                list->pids[0].iface = 0;
+                list->pids[0].device = hda->card_num;
+                list->pids[0].subdevice = 0;
+                list->pids[0].index = 0;
+                strcpy((char*)list->pids[0].name, "Master");
+            }
             break;
         }
         case SNDRV_CTL_IOCTL_SUBSCRIBE_EVENTS:{
@@ -1284,7 +1280,7 @@ void HDA::hwparams(snd_pcm_hw_params* params){
     buffer_time->min = buffer_time->max = buffer_time_us;
 
 
-    params->info = SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_MMAP_VALID;
+    params->info = SNDRV_PCM_INFO_INTERLEAVED;
     params->cmask = params->rmask;
     selected_format = GetFormat(requested_rate, sample_size, requested_channels);
 }
@@ -1402,7 +1398,7 @@ int hda_pcm_ioctl(int op, char* argp, vnode_t* node){
                 params->cmask |= SNDRV_PCM_HW_PARAM_SUBFORMAT;
             }
 
-            params->info = SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_BLOCK_TRANSFER;
+            params->info = SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_BLOCK_TRANSFER;
             params->cmask = params->rmask;
             return 0;
         }

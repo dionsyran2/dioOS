@@ -4,10 +4,7 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "${workspaceFolder}/ACPI/include",
-                "${workspaceFolder}/acpica/include",
-                "/home/dioni/dioOS/kernel/include",
-                "/home/dioni/dioOS/kernel/include/uACPI/include"
+                "/home/dioni/limine/kernel/include"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",

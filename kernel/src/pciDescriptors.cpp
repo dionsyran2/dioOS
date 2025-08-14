@@ -47,6 +47,8 @@ namespace PCI {
         switch (vendorID){
             case 0x8086: // Intel
                 switch(deviceID){
+                    case 0x10D3:
+                        return "82574L Gigabit Network Connection";
                     case 0x29C0:
                         return "Express DRAM Controller";
                     case 0x2918:

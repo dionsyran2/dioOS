@@ -1,6 +1,7 @@
 #include <interrupts/interrupts.h>
-#include "kernel.h"
+#include <kernel.h>
 #include <ArrayList.h>
+#include <syscalls/syscalls.h>
 //#define PANIC_ON_EXCEPTION
 
 void HaltExecution(){

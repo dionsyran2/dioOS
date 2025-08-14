@@ -46,3 +46,4 @@ bool isdigit(char c);
 long kstrtol(const char* str, char** endptr, int base);
 
 char* conv_wchar(wchar_t* string);
+wchar_t* char_to_wchar_string(char* str);

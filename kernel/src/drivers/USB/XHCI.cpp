@@ -56,8 +56,6 @@ namespace drivers{
         memset(&trb, 0, sizeof(trb));
         trb.trb_type = XHCI_TRB_TYPE_ENABLE_SLOT_CMD;
 
-        Sleep(1000);
-
         for (int i = 0; i < m_max_ports; i++){
             xhci_command_completion_trb_t* completion_trb = _send_command_trb(&trb);
             kprintf("Port %d is USB%d\n", i, _is_usb3_port(i) ? 3 : 2);
@@ -389,7 +387,7 @@ namespace drivers{
     }
 
     void xhci_driver::_process_events(){
-        kstl::Vector<xhci_trb_t*> events;
+        kstl::Vector<xhci_trb_t*> events = kstl::Vector<xhci_trb_t*>();
 
         if (m_event_ring->has_unprocessed_events()){
             m_event_ring->dequeue_events(events);
@@ -427,7 +425,7 @@ namespace drivers{
 
         while(!m_command_irq_completed){
             Sleep(1);
-            time_elapsed += 10;
+            time_elapsed += 1;
 
             if (time_elapsed > timeout_ms)
                 break;

@@ -1,5 +1,5 @@
 #pragma once
-//#define LOG_SYSCALLS	// this will log any syscall received to COM1...
+#define LOG_SYSCALLS	// this will log any syscall received to COM1...
 				   		// and halt if a syscall is not implemented printing its
 					   	// number and parameters to the screen
 						// Note: if you wanna test the sound system, its better if you disable this.
@@ -62,6 +62,7 @@ void register_sig_syscalls();
 #define SYSCALL_FCHDIR					81
 #define SYSCALL_MKDIR					83
 #define SYSCALL_CREAT					85
+#define SYSCALL_CHOWN					92
 #define SYSCALL_GETTIMEOFDAY			96
 #define SYSCALL_GETRLIMIT				97
 #define SYSCALL_GETUID                  102
@@ -88,6 +89,7 @@ void register_sig_syscalls();
 #define SYSCALL_GETDENTS64				217
 #define SYSCALL_SET_TID_ADDR            218
 #define SYSCALL_GETTIME                 228
+#define SYSCALL_CLOCKNANOSLEEP			230
 #define SYSCALL_EXIT_GROUP              231
 #define SYSCALL_TGKILL					234
 #define SYSCALL_OPENAT					257

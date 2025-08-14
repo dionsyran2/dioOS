@@ -15,3 +15,4 @@ class PageTableManager {
 };
 
 extern PageTableManager globalPTM;
+extern bool PTM_USE_VADDR;

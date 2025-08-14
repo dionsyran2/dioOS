@@ -2,95 +2,34 @@
 #include <paging/PageFrameAllocator.h>
 #include <scheduling/lock/spinlock.h>
 
+
 BasicRenderer* globalRenderer;
-spinlock_t renderer_spinlock;
+//spinlock_t renderer_spinlock;
 
 void BasicRenderer::Set(bool val){
     status = val;
 }
 
-BasicRenderer::BasicRenderer(multiboot_tag_framebuffer* targetFrameBuffer, PSF1_FONT* psf1_font)
+BasicRenderer::BasicRenderer(display* screen, void* font)
 {
-    targetFramebuffer = targetFrameBuffer;
-    backbuffer = GlobalAllocator.RequestPages((targetFrameBuffer->common.framebuffer_height * targetFrameBuffer->common.framebuffer_pitch) / 0x1000);
-    memset(backbuffer, 0, targetFrameBuffer->common.framebuffer_height * targetFrameBuffer->common.framebuffer_pitch);
-    PSF1_Font = psf1_font;
-    cursorPos.X = 0;
-    cursorPos.Y = 0;
-    cursorPos.XLim = targetFrameBuffer->common.framebuffer_width-1;
-    cursorPos.overX = 0;
-};
-
-static uint32_t clr = 0;
-
-void BasicRenderer::updateScreen(){
-    memcpy_simd((void*)targetFramebuffer->common.framebuffer_addr, backbuffer, targetFramebuffer->common.framebuffer_height * targetFramebuffer->common.framebuffer_pitch);
+    status = true;
+    this->font_height = FONT_HEIGHT;
+    this->screen = screen;
+    this->screen->get_screen_size(&width, &height, nullptr);
+    this->cursorPos.X = 0;
+    this->cursorPos.Y = 0;
+    this->font = (PSF1_FONT*)font;
 }
 
-void BasicRenderer::drawChar(unsigned int color, char chr, unsigned int xOff, unsigned int yOff){
-    if (!status) return;
-    serialWrite(COM1, chr);
-    char* PSF1_FontPtr = (char*)PSF1_Font->glyphBuffer + (chr * PSF1_Font->psf1_Header->charsize);
+
+
+void BasicRenderer::draw_char(unsigned int color, wchar_t chr, unsigned int xOff, unsigned int yOff){
+    chr = read_unicode_table(chr);
+    char* PSF1_FontPtr = (char*)font->glyphBuffer + (chr * font->psf1_Header->charsize);
     for (unsigned long y=yOff; y<yOff + 16; y++){
         for(unsigned long x = xOff; x<xOff + 8; x++){
             if((*PSF1_FontPtr & (0b10000000 >> (x - xOff))) > 0){
-                if (x < 0 || x > targetFramebuffer->common.framebuffer_width - 1 || y < 0 || y > targetFramebuffer->common.framebuffer_height - 1) continue;
-                PutPix(x, y, color);
-            }
-        }
-        PSF1_FontPtr++;
-    }
-}
-
-void BasicRenderer::draw_char_tty(uint32_t color, uint32_t bg, char chr, unsigned int xOff, unsigned int yOff, bool underline){
-    char* PSF1_FontPtr = (char*)PSF1_Font->glyphBuffer + (chr * PSF1_Font->psf1_Header->charsize);
-    if ((uint64_t)PSF1_FontPtr > GlobalAllocator.GetMemSize()) return;
-    for (unsigned long y=yOff; y<yOff + 16; y++){
-        for(unsigned long x = xOff; x<xOff + 8; x++){
-            if (x < 0 || x > targetFramebuffer->common.framebuffer_width - 1 || y < 0 || y > targetFramebuffer->common.framebuffer_height - 1) continue;
-            if(((*PSF1_FontPtr) & (0b10000000 >> (x - xOff))) > 0){
-                PutPixFB(x, y, color);
-            }else{
-                PutPixFB(x, y, bg);
-            }
-        }
-        PSF1_FontPtr++;
-    }
-
-    if (!underline) return;
-    // UNDERLINE
-
-    PSF1_FontPtr = (char*)PSF1_Font->glyphBuffer + ('_' * PSF1_Font->psf1_Header->charsize);
-    for (unsigned long y=yOff; y<yOff + 16; y++){
-        for(unsigned long x = xOff; x<xOff + 8; x++){
-            if((*PSF1_FontPtr & (0b10000000 >> 4)) > 0){
-                if (x < 0 || x > targetFramebuffer->common.framebuffer_width - 1 || y < 0 || y > targetFramebuffer->common.framebuffer_height - 1) continue;
-                PutPixFB(x, y, color);
-            }
-        }
-        PSF1_FontPtr++;
-    }
-}
-
-void BasicRenderer::draw_cursor(uint32_t xOff, uint32_t yOff, uint32_t clr){
-    char* PSF1_FontPtr = (char*)PSF1_Font->glyphBuffer + ('_' * PSF1_Font->psf1_Header->charsize);
-    for (unsigned long y=yOff; y<yOff + 16; y++){
-        for(unsigned long x = xOff; x<xOff + 8; x++){
-            if((*PSF1_FontPtr & (0b10000000 >> (x - xOff))) > 0){
-                if (x < 0 || x > targetFramebuffer->common.framebuffer_width - 1 || y < 0 || y > targetFramebuffer->common.framebuffer_height - 1) continue;
-                PutPixFB(x, y, clr);
-            }
-        }
-        PSF1_FontPtr++;
-    }
-}
-void BasicRenderer::clear_cursor(uint32_t xOff, uint32_t yOff){
-    char* PSF1_FontPtr = (char*)PSF1_Font->glyphBuffer + ('_' * PSF1_Font->psf1_Header->charsize);
-    for (unsigned long y=yOff; y<yOff + 16; y++){
-        for(unsigned long x = xOff; x<xOff + 8; x++){
-            if((*PSF1_FontPtr & (0b10000000 >> (x - xOff))) > 0){
-                if (x < 0 || x > targetFramebuffer->common.framebuffer_width - 1 || y < 0 || y > targetFramebuffer->common.framebuffer_height - 1) continue;
-                PutPixFB(x, y, 0);
+               screen->set_pixel(x, y, color);
             }
         }
         PSF1_FontPtr++;
@@ -98,44 +37,42 @@ void BasicRenderer::clear_cursor(uint32_t xOff, uint32_t yOff){
 }
 
 void BasicRenderer::HandleScrolling() {
-    size_t fbSize = targetFramebuffer->common.framebuffer_pitch * targetFramebuffer->common.framebuffer_height;
+    screen->scroll(font_height);
 
-    memmove(backbuffer,
-        (void*)((uintptr_t)backbuffer + 64 * (globalRenderer->targetFramebuffer->common.framebuffer_pitch / (globalRenderer->targetFramebuffer->common.framebuffer_bpp / 8))),
-        (targetFramebuffer->common.framebuffer_height) * targetFramebuffer->common.framebuffer_width * sizeof(uint32_t));
-
-    // Clear the last row to avoid artifacts
-    
-    memcpy((void*)backbuffer, backbuffer, fbSize);
-
-    for (int y = 0; y < 16; y++){
-        for (int x = 0; x < targetFramebuffer->common.framebuffer_width; x++) {
-            PutPix(x, (targetFramebuffer->common.framebuffer_height-1) - y, clr);
+    for (int y = 0; y < font_height; y++){
+        for (int x = 0; x < width; x++) {
+            screen->set_pixel(x, height - (y + 1), 0);
         }
     }
 
+    screen->update_screen();
     
-    cursorPos.Y -= 16;
+    cursorPos.Y -= font_height;
 }
 
-void BasicRenderer::print(unsigned int color, const char* str){
+void BasicRenderer::print(unsigned int color, const wchar_t* str){
     if (!status) return;
 
-    char* chr = (char*)str;
+    wchar_t* chr = (wchar_t*)str;
     while (*chr != 0){
-        if (cursorPos.Y+16 >= targetFramebuffer->common.framebuffer_height) {
+        if (*chr != '\n') serialWrite(COM1, *chr);
+        
+        size_t char_width = 8;
+        if (cursorPos.Y + font_height >= height) {
             HandleScrolling();
         }
 
+
         // Draw character if within bounds
         if (*chr != '\n') {
-            drawChar(color, *chr, cursorPos.X, cursorPos.Y);
+            draw_char(color, *chr, cursorPos.X, cursorPos.Y);
         }
 
-        cursorPos.X += 8; // Move cursor to the right
-        if ((cursorPos.X + 8) > cursorPos.XLim || (*chr == '\n')) {
-            cursorPos.X = cursorPos.overX; // Move back to start of the line
-            cursorPos.Y += 16; // Move down to the next line
+        cursorPos.X += char_width; // Move cursor to the right
+
+        if (cursorPos.X > width || (*chr == '\n')) {
+            cursorPos.X = 0; // Move back to start of the line
+            cursorPos.Y += font_height; // Move down to the next line
 
             if (*chr == '\n'){
                 serialPrint(COM1, "\n\r");
@@ -144,25 +81,17 @@ void BasicRenderer::print(unsigned int color, const char* str){
         chr++;
     }
 }
-void BasicRenderer::printf(unsigned int color, const char* str, ...){
-    va_list args;
-    va_start(args, str);
-    printfva(color, str, args);
-    va_end(args);
-}
 
-void BasicRenderer::printf(const char* str, ...){
-    va_list args;
-    va_start(args, str);
-    printfva(0xFFFFFF, str, args);
-    va_end(args);
+void BasicRenderer::print(unsigned int color, const char* str){
+    wchar_t* wchar = char_to_wchar_string((char*)str);
+    print(color, wchar);
+    delete wchar;
 }
-
-void BasicRenderer::printfva(uint32_t color, const char* str, va_list args){
+void BasicRenderer::printfva(uint32_t color, const wchar_t* str, va_list args){
     if (!status) return;
 
 
-    char* chr = (char*)str;
+    wchar_t* chr = (wchar_t*)str;
 
     while (*chr != 0){
         if (*chr == '%'){
@@ -248,155 +177,64 @@ void BasicRenderer::printfva(uint32_t color, const char* str, va_list args){
         continue;
         }
 
-        print(color, charToConstCharPtr(*chr));
+        wchar_t c[2] = {*chr, L'\0'};
+        print(color, c);
         chr++;
     }
-    updateScreen();
+    screen->update_screen();
 }
 
-void BasicRenderer::print(const char* str){
-    print(0xFFFFFF, str);
+
+void BasicRenderer::printfva(uint32_t color, const char* str, va_list args){
+    wchar_t* wchar = char_to_wchar_string((char*)str);
+    printfva(color, wchar, args);
+    delete wchar;
 }
-
-void BasicRenderer::DrawPixels(unsigned int xStart, unsigned int xEnd, unsigned int yStart, unsigned int yEnd, unsigned int color) {
-    if (!status) return;
-    unsigned int BBP = 4; // Bytes per pixel (assuming 32-bit color)
-
-    // Fill the pixel area
-    for (unsigned int y = yStart; y < yEnd; y++) {
-        for (unsigned int x = xStart; x < xEnd; x++) {
-            // Calculate the pixel address
-            unsigned int* pixelAddress = (unsigned int*)((unsigned int*)backbuffer + x + (y * (globalRenderer->targetFramebuffer->common.framebuffer_pitch / (globalRenderer->targetFramebuffer->common.framebuffer_bpp / 8))));
-            *pixelAddress = color; // Set the pixel color
+void BasicRenderer::draw_char_tty(uint32_t color, uint32_t bg, wchar_t chr, unsigned int xOff, unsigned int yOff, bool underline){
+    for (int y = 0; y < font_height; y++){
+        for (int x = 0; x < 8; x++){
+            screen->set_pixel(x + xOff, y + yOff, bg);
         }
     }
+    
+    draw_char(color, chr, xOff, yOff);
+
+    if (!underline) {screen->update_screen(xOff, yOff, 8, font_height); return;}
+    // UNDERLINE
+
+    for (int y = font_height - 2; y < font_height; y++){
+        for (int x = 0; x < 8; x++){
+            screen->set_pixel(x + xOff, y + yOff, color);
+        }
+    }
+    screen->update_screen(xOff, yOff, 8, font_height);
 }
+
+void BasicRenderer::draw_cursor(uint32_t xOff, uint32_t yOff, uint32_t clr){
+    for (int y = font_height - 3; y < font_height; y++){
+        for (int x = 0; x < 8; x++){
+            screen->set_pixel(x + xOff, y + yOff, clr);
+        }
+    }
+    screen->update_screen(xOff, yOff, 8, font_height);
+}
+void BasicRenderer::clear_cursor(uint32_t xOff, uint32_t yOff){
+    for (int y = font_height - 3; y < font_height; y++){
+        for (int x = 0; x < 8; x++){
+            screen->set_pixel(x + xOff, y + yOff, 0);
+        }
+    }
+    screen->update_screen(xOff, yOff, 8, font_height);
+}
+
 
 void BasicRenderer::Clear(unsigned int color){
     if (!status) return;
-    DrawPixels(0, targetFramebuffer->common.framebuffer_width, 0, targetFramebuffer->common.framebuffer_height, color);
-    clr = color;
-}
-void BasicRenderer::PutPix(uint32_t X, uint32_t Y, uint32_t Colour){
-    if (X >= targetFramebuffer->common.framebuffer_width || Y >= targetFramebuffer->common.framebuffer_height) return;
-    uint8_t* base = (uint8_t*)backbuffer;
-    uint32_t* pixel = (uint32_t*)(base + (Y * targetFramebuffer->common.framebuffer_pitch) + (X * (targetFramebuffer->common.framebuffer_bpp / 8)));
-    *pixel = Colour;
+    screen->draw_rectangle(0, 0, width, height, color);
+    screen->update_screen();
 }
 
-void BasicRenderer::PutPixFB(uint32_t X, uint32_t Y, uint32_t Colour){
-    if (X >= targetFramebuffer->common.framebuffer_width || Y >= targetFramebuffer->common.framebuffer_height) return;
-    uint8_t* base = (uint8_t*)targetFramebuffer->common.framebuffer_addr;
-    uint32_t* pixel = (uint32_t*)(base + (Y * targetFramebuffer->common.framebuffer_pitch) + (X * (targetFramebuffer->common.framebuffer_bpp / 8)));
-    *pixel = Colour;
-}
-
-uint32_t BasicRenderer::GetPix(uint32_t X, uint32_t Y){
-    uint8_t* base = (uint8_t*)backbuffer;
-    uint32_t* pixel = (uint32_t*)(base + (Y * targetFramebuffer->common.framebuffer_pitch) + (X * (targetFramebuffer->common.framebuffer_bpp / 8)));
-    return *pixel;
-}
-bool MouseDrawn = false;
-void BasicRenderer::ClearMouseCursor(uint8_t* MouseCursor, Point Position){
-    //if (status == false) return;
-    if (!MouseDrawn) return;
-
-    int XMax = 16;
-    int YMax = 16;
-    int DifferenceX = targetFramebuffer->common.framebuffer_width - Position.X;
-    int DifferenceY = targetFramebuffer->common.framebuffer_height - Position.Y;
-
-    if (DifferenceX < 16) XMax = DifferenceX;
-    if (DifferenceY < 16) YMax = DifferenceY;
-
-    for (int Y = 0; Y < YMax; Y++){
-        for (int X = 0; X < XMax; X++){
-            int Bit = Y * 16 + X;
-            int Byte = Bit / 8;
-            if ((MouseCursor[Byte] & (0b10000000 >> (X % 8))))
-            {
-                if (GetPix(Position.X + X, Position.Y + Y) == MouseCursorBufferAfter[X + Y *16]){
-                    PutPix(Position.X + X, Position.Y + Y, MouseCursorBuffer[X + Y * 16]);
-                }
-            }
-        }
-    }
-}
-
-void BasicRenderer::DrawOverlayMouseCursor(uint8_t* MouseCursor, Point Position, uint32_t Colour){
-    /*if (status == false) {
-        g_AdvRend->DrawOverlayMouseCursor(MouseCursor, Position, Colour);
-        return;
-    };*/
-    /*int XMax = 16;
-    int YMax = 16;
-    int DifferenceX = targetFramebuffer->common.framebuffer_width - Position.X;
-    int DifferenceY = targetFramebuffer->common.framebuffer_height - Position.Y;
-
-    if (DifferenceX < 16) XMax = DifferenceX;
-    if (DifferenceY < 16) YMax = DifferenceY;
-
-    for (int Y = 0; Y < YMax; Y++){
-        for (int X = 0; X < XMax; X++){
-            int Bit = Y * 16 + X;
-            int Byte = Bit / 8;
-            if ((MouseCursor[Byte] & (0b10000000 >> (X % 8))))
-            {
-                MouseCursorBuffer[X + Y * 16] = GetPix(Position.X + X, Position.Y + Y);
-                PutPix(Position.X + X, Position.Y + Y, Colour);
-                MouseCursorBufferAfter[X + Y * 16] = GetPix(Position.X + X, Position.Y + Y);
-
-            }
-        }
-    }
-
-    MouseDrawn = true;*/
-}
-void BasicRenderer::ClearChar(unsigned int color){
-    if (!status) return;
-
-    if (cursorPos.X == 0){
-        cursorPos.X = targetFramebuffer->common.framebuffer_width;
-        cursorPos.Y -= 16;
-        if (cursorPos.Y < 0) cursorPos.Y = 0;
-    }
-
-    unsigned int XOffset = cursorPos.X;
-    unsigned int YOffset = cursorPos.Y;
-
-    unsigned int* PixelPtr = (unsigned int*)backbuffer;
-    for (unsigned long Y = YOffset; Y < YOffset + 16; Y++){
-        for (unsigned long X = XOffset - 8; X < XOffset; X++){
-                    *(unsigned int*)(PixelPtr + X + (Y * (globalRenderer->targetFramebuffer->common.framebuffer_pitch / (globalRenderer->targetFramebuffer->common.framebuffer_bpp / 8)))) = color;
-        }
-    }
-
-    cursorPos.X -= 8;
-
-    if (cursorPos.X < 0){
-        cursorPos.X = targetFramebuffer->common.framebuffer_width;
-        cursorPos.Y -= 16;
-        if (cursorPos.Y < 0) cursorPos.Y = 0;
-    }
-
-}
-
-
-void kprintf(unsigned int color, const char* str, ...){
-    va_list args;
-    va_start(args, str);
-    globalRenderer->printfva(color, str, args);
-    va_end(args);
-}
-
-void kprintf(const char* str, ...){
-    va_list args;
-    va_start(args, str);
-    globalRenderer->printfva(0xFFFFFF, str, args);
-    va_end(args);
-}
-
-void DrawBMPScaled(int dstX, int dstY, int targetW, int targetH, uint8_t* bmpData, void* buffer, uint64_t pitch) {
+void BasicRenderer::DrawBMPScaled(int dstX, int dstY, int targetW, int targetH, uint8_t* bmpData) {
     BMPFileHeader* fileHeader = (BMPFileHeader*)bmpData;
     BMPInfoHeader* infoHeader = (BMPInfoHeader*)(bmpData + sizeof(BMPFileHeader));
 
@@ -426,7 +264,71 @@ void DrawBMPScaled(int dstX, int dstY, int targetW, int targetH, uint8_t* bmpDat
             uint8_t red   = pixel[2];
 
             uint32_t color = 0xFF000000 | (red << 16) | (green << 8) | blue;
-            *(uint32_t*)((uint8_t*)buffer + destY * pitch + destX * 4) = color;
+            screen->set_pixel(destX, destY, color);
         }
     }
+}
+
+
+void kprintf(unsigned int color, const char* str, ...){
+    va_list args;
+    va_start(args, str);
+    globalRenderer->printfva(color, str, args);
+    va_end(args);
+}
+
+void kprintf(const char* str, ...){
+    va_list args;
+    va_start(args, str);
+    globalRenderer->printfva(0xFFFFFF, str, args);
+    va_end(args);
+}
+
+
+void kprintf(unsigned int color, const wchar_t* str, ...){
+    va_list args;
+    va_start(args, str);
+    globalRenderer->printfva(color, str, args);
+    va_end(args);
+}
+
+void kprintf(const wchar_t* str, ...){
+    va_list args;
+    va_start(args, str);
+    globalRenderer->printfva(0xFFFFFF, str, args);
+    va_end(args);
+}
+
+uint16_t BasicRenderer::read_unicode_table(uint32_t codepoint) {
+    if (((font->psf1_Header->mode & PSF1_MODEHASTAB) == 0) || codepoint < 0x7F)
+        return codepoint < 0x7F ? (uint16_t)codepoint : '?';
+
+    int glyph_count = (font->psf1_Header->mode & PSF1_MODE512) ? 512 : 256;
+    uint16_t* unicode_table = (uint16_t*)((uint64_t)font->glyphBuffer + (glyph_count * font->psf1_Header->charsize));
+
+    uint64_t entries = (font->size - sizeof(PSF1_HEADER) - (glyph_count * font->psf1_Header->charsize)) / sizeof(uint16_t);
+    int glyph = 0;
+    for (uint64_t i = 0; i < entries;) {
+        bool matched = false;
+
+        // One or more sequences per glyph
+        while (i < entries) {
+            uint16_t cp = unicode_table[i++];
+            if (cp == 0xFFFE) {
+                continue; // Start of new sequence
+            } else if (cp == 0xFFFF) {
+                break; // End of current glyph entry
+            } else if (cp == codepoint) {
+                matched = true;
+                break;
+            }
+        }
+
+        if (matched) return glyph;
+
+        glyph++;
+        if (glyph >= glyph_count) break; // Avoid overflow
+    }
+
+    return read_unicode_table(0xFFFD); // replacement char
 }

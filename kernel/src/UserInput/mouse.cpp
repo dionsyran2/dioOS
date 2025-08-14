@@ -116,7 +116,7 @@ namespace PS2Mouse
             }
         }
 
-        if (MousePosition.X < 0)
+        /*if (MousePosition.X < 0)
             MousePosition.X = 0;
         if (MousePosition.X > globalRenderer->targetFramebuffer->common.framebuffer_width - 1)
             MousePosition.X = globalRenderer->targetFramebuffer->common.framebuffer_width - 1;
@@ -124,7 +124,7 @@ namespace PS2Mouse
         if (MousePosition.Y < 0)
             MousePosition.Y = 0;
         if (MousePosition.Y > globalRenderer->targetFramebuffer->common.framebuffer_height - 1)
-            MousePosition.Y = globalRenderer->targetFramebuffer->common.framebuffer_height - 1;
+            MousePosition.Y = globalRenderer->targetFramebuffer->common.framebuffer_height - 1;*/
 
         uint32_t bdata = 0;
 

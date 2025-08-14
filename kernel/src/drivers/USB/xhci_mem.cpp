@@ -36,5 +36,5 @@ void free_xhci_memory(void* ptr){
 }
 
 uintptr_t xhci_get_physical_addr(void* vaddr){
-    return dma_phys_addr(vaddr);
+    return globalPTM.getPhysicalAddress(vaddr);
 }

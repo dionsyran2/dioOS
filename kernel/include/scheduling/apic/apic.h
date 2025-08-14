@@ -95,6 +95,6 @@ uint32_t get_apic_id();
 uint64_t to_unix_timestamp(int sec, int min, int hour, int day, int month, int year);
 uint64_t to_unix_timestamp(RTC::rtc_time_t* time);
 
-extern uint64_t LAPICAddress;
 extern uint64_t APICticsSinceBoot;
 extern RTC::rtc_time_t* c_time;
+extern uint64_t uptime;

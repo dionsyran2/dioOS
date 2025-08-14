@@ -523,3 +523,16 @@ char* conv_wchar(wchar_t* string){
     }
     return cstr;
 }
+
+wchar_t* char_to_wchar_string(char* str){
+    char* c = str;
+    wchar_t* buffer = new wchar_t[strlen(str) + 1];
+    wchar_t* wc = buffer;
+    while(*c != '\0'){
+        *wc = *c;
+        wc++;
+        c++;
+    }
+    *wc = L'\0';
+    return buffer;
+}
