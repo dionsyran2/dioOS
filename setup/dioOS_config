@@ -1,0 +1,19 @@
+
+choice
+    prompt "Core Binaries (sh, ls etc.)"
+    default BUSYBOX
+
+    config BUSYBOX
+    bool "BusyBox"
+    help
+        BusyBox is an implementation of many Unix commands in a single executable file 
+
+endchoice
+
+config HTOP
+    bool "HTOP"
+    default y
+
+config BASH
+    bool "BASH"
+    default y

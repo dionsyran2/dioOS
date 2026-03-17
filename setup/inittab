@@ -1,0 +1,4 @@
+# /etc/inittab - minimal for dioOS
+tty0::respawn:/sbin/agetty -8 38400 tty0
+#tty0::respawn:/bin/ls
+::ctrlaltdel:/sbin/reboot
