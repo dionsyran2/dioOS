@@ -10,7 +10,6 @@ long unlink(const char *ustring){
     char path[2048];
     fix_path(ustring, path, sizeof(path), self);
 
-    serialf("UNLINK: %s\n", path);
     vnode_t *node = vfs::resolve_path(path);
     if (!node) return -ENOENT;
 

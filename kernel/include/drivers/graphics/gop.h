@@ -31,7 +31,6 @@ namespace drivers{
         // @brief Scrolls up by the amount of pixels provided
         void Scroll(int y);
 
-        private:
         // @brief A backbuffer (To speed up read operations)
         uint32_t* backbuffer;
 

@@ -38,9 +38,8 @@ long sys_stat_internal(vnode_t* node, struct stat* statbuf, bool lnk){
 
     statbuf->st_dev = node->inode;
     statbuf->st_ino = node->inode;
-    statbuf->st_mode =  S_IRUSR | S_IWUSR | S_IXUSR |  // user: rwx
-                        S_IRGRP | S_IXGRP |            // group: r-x
-                        S_IROTH | S_IXOTH;             // other: r-x
+    statbuf->st_mode =  node->permissions;
+    
     switch(node->type){
         case VDIR:
             statbuf->st_mode |= S_IFDIR;

@@ -80,9 +80,8 @@ void initialize_memory(){
             globalPTM.MapMemory((void*)(MEMORY_BASE + i + entry->base), (void*)(i + entry->base));
         }
     }
-    
 
-    asm ("mov %0, %%cr3" :: "r" (virtual_to_physical((uint64_t)globalPTM.PML4)));
+    asm ("mov %0, %%cr3" :: "r" (global_ptm_cr3));
 
     /* HEAP */
     InitializeHeap(HEAP_BASE, 1 * 1024 * 1024);
@@ -303,6 +302,7 @@ void start_userspace(){
     task_t* task = execute_elf(fnode, 1, args, init_executables[i]);
     task->tgid = 1;
     task->pid = 1;
+
     task_scheduler::mark_ready(task);
 }
 void init_kernel_subsystems(){

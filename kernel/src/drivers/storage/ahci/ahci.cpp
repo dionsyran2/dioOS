@@ -159,12 +159,13 @@ vnode_ops_t atapi_disk_ops = {
 
 void ahci_port_t::initialize(){
     if (this->port->signature == SATA_SIG_ATA){
-        void* buff = GlobalAllocator.RequestPage();
-        *((uint32_t*) buff) = 0xAABBCCDD;
-        *(((uint32_t*) buff)+1) = 0xAABBCCDD;
-        
         // Normal hard disk
-        vnode_t* node = new vnode_t(VBLK);
+        int disk_number = __atomic_fetch_add(&ahci_port_count, 1, __ATOMIC_SEQ_CST);
+
+        char path_buff[128];
+        stringf(path_buff, sizeof(path_buff), "/dev/sd%c", 'a' + disk_number);
+
+        vnode_t* node = vfs::create_path(path_buff, VBLK);
         node->fs_identifier = (uint64_t)this;
         node->io_block_size = 512;
         
@@ -172,35 +173,19 @@ void ahci_port_t::initialize(){
 
         node->size = this->total_sectors * 512;
 
-        int disk_number = __atomic_fetch_add(&ahci_port_count, 1, __ATOMIC_SEQ_CST);
-
-        stringf(node->name, sizeof(node->name), "sd%c", 'a' + disk_number);
         memcpy(&node->file_operations, &ata_disk_ops, sizeof(vnode_ops_t));
 
-        vnode_t* dev_dir = vfs::resolve_path("/dev");
-        if (dev_dir == nullptr){
-            kprintf("[AHCI] Could not resolve path '/dev'\n");
-        }else{
-            vfs::add_node(dev_dir, node);
-
-            intialize_disk_partitions(node, false);
-            
-            // Close our reference to /dev
-            dev_dir->close();
-        }
+        intialize_disk_partitions(node, false);
+        
+        node->close();
     } else if (this->port->signature == SATA_SIG_ATAPI){
-        vnode_t* node = new vnode_t(VBLK);
-        node->fs_identifier = (uint64_t)this;
-
-        char name[64];
         char path[128];
 
         int drive = 0;
 
         // Find a name for the node
         while(1){
-            stringf(name, 64, "sr%d", drive);
-            stringf(path, 128, "/dev/%s", name);
+            stringf(path, 128, "/dev/sr%d", drive);
             vnode_t* res = vfs::resolve_path(path);
             
             if (!res) break;
@@ -209,16 +194,9 @@ void ahci_port_t::initialize(){
             // continue
         }
 
-        strcpy(node->name, name);
-
-        vnode_t* dev_dir = vfs::resolve_path("/dev");
-        if (dev_dir == nullptr){
-            kprintf("[AHCI] Could not resolve path '/dev'\n");
-        }else{
-            vfs::add_node(dev_dir, node);
-            
-            // Close our reference to /dev
-            dev_dir->close();
-        }
+        vnode_t* node = vfs::create_path(path, VBLK);
+        memset(&node->file_operations, 0, sizeof(node->file_operations)); // Erase them since we dont support cdroms yet
+        node->fs_identifier = (uint64_t)this;
+        node->close();
     }
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stddef.h>
 #include <cpuid.h>
 
 #define IA32_FS_BASE        0xC0000100
@@ -94,6 +95,7 @@ static inline void __native_flush_tlb_single(unsigned long addr) {
    asm volatile("invlpg (%0)" ::"r" (addr) : "memory");
 }
 
+extern size_t g_fpu_storage_size;
 inline void save_fpu_state(void* buffer) {
     uint32_t low, high;
     
@@ -133,7 +135,7 @@ inline void restore_fpu_state(void* buffer) {
     );
 }
 
-extern size_t g_fpu_storage_size;
+
 
 inline void detect_fpu_area_size() {
     uint32_t eax, ebx, ecx, edx;

@@ -278,4 +278,112 @@ build_xinit:
 	$(MAKE) -C $(TMPDIR)/$(XINIT_VERSION) -j$(NPROC)
 	$(MAKE) -C $(TMPDIR)/$(XINIT_VERSION) DESTDIR=$(DISKDIR) install
 
-build_xorg: build_xinit build_openssl build_pixman build_libxkbfile build_libxcvt build_freetype build_libfontenc build_libXdmcp build_libXfont2 build_zlib build_xorg_server
+build_macros:
+	@if [ ! -d $(TMPDIR)/macros ]; then cd $(TMPDIR) && git clone https://gitlab.freedesktop.org/xorg/util/macros.git; fi
+	cd $(TMPDIR)/macros && \
+	./autogen.sh --prefix=/usr/local && \
+	$(MAKE) && \
+	$(MAKE) install
+
+# xf86-video-fbdev (fb driver)
+XF86_VIDEO_FBDEV_GIT = https://gitlab.freedesktop.org/xorg/driver/xf86-video-fbdev.git
+build_xf86_video_fbdev: build_macros
+	@if [ ! -d $(TMPDIR)/xf86-video-fbdev ]; then cd $(TMPDIR) && git clone $(XF86_VIDEO_FBDEV_GIT); fi
+	cd $(TMPDIR)/xf86-video-fbdev && \
+	PKG_CONFIG_DIR="" \
+	PKG_CONFIG_LIBDIR="$(DISKDIR)/usr/lib/pkgconfig:$(DISKDIR)/usr/share/pkgconfig:$(DISKDIR)/lib/x86_64-dioOS-gnu/pkgconfig:$(DISKDIR)/usr/lib/x86_64-dioOS-gnu/pkgconfig" \
+	PKG_CONFIG_SYSROOT_DIR="$(DISKDIR)" \
+	ACLOCAL="aclocal -I /usr/local/share/aclocal -I $(DISKDIR)/usr/share/aclocal" \
+	LDFLAGS="-L$(DISKDIR)/lib/x86_64-dioOS-gnu -L$(DISKDIR)/usr/lib" \
+	CFLAGS="-I$(DISKDIR)/usr/include -DXFree86LOADER -DIN_MODULE -DXFree86Server" \
+	./autogen.sh --host=$(TARGET_ARCH) --prefix=/usr
+	
+
+	$(MAKE) -C $(TMPDIR)/xf86-video-fbdev
+	$(MAKE) -C $(TMPDIR)/xf86-video-fbdev DESTDIR=$(DISKDIR) install
+
+
+# keyboard
+XF86_INPUT_EVDEV_VERSION = xf86-input-evdev-2.7.3
+XF86_INPUT_EVDEV_URL = https://www.x.org/releases/individual/driver/$(XF86_INPUT_EVDEV_VERSION).tar.bz2
+
+build_xf86_input_evdev: build_macros
+	@echo "Building vintage evdev (no libevdev/mtdev required!)..."
+	@if [ ! -f $(TMPDIR)/$(XF86_INPUT_EVDEV_VERSION).tar.bz2 ]; then wget -P $(TMPDIR) $(XF86_INPUT_EVDEV_URL); fi
+	@if [ ! -d $(TMPDIR)/$(XF86_INPUT_EVDEV_VERSION) ]; then tar -C $(TMPDIR) -xf $(TMPDIR)/$(XF86_INPUT_EVDEV_VERSION).tar.bz2; fi
+	
+	cd $(TMPDIR)/$(XF86_INPUT_EVDEV_VERSION) && \
+	PKG_CONFIG_DIR="" \
+	PKG_CONFIG_LIBDIR="$(DISKDIR)/usr/lib/pkgconfig:$(DISKDIR)/usr/share/pkgconfig:$(DISKDIR)/lib/x86_64-dioOS-gnu/pkgconfig:$(DISKDIR)/usr/lib/x86_64-dioOS-gnu/pkgconfig" \
+	PKG_CONFIG_SYSROOT_DIR="$(DISKDIR)" \
+	LDFLAGS="-L$(DISKDIR)/lib/x86_64-dioOS-gnu -L$(DISKDIR)/usr/lib -Wl,-rpath-link=$(DISKDIR)/lib/x86_64-dioOS-gnu" \
+	CPPFLAGS="-I$(DISKDIR)/usr/include" \
+	CFLAGS="-I$(DISKDIR)/usr/include" \
+	./configure --host=$(TARGET_ARCH) --prefix=/usr
+
+	SYSROOT=$(DISKDIR) $(MAKE) -C $(TMPDIR)/$(XF86_INPUT_EVDEV_VERSION)
+	$(MAKE) -C $(TMPDIR)/$(XF86_INPUT_EVDEV_VERSION) DESTDIR=$(DISKDIR) install
+	
+# --- Whatever this is ---
+XKB_CONFIG_VERSION = xkeyboard-config-2.38
+XKB_CONFIG_URL = https://www.x.org/releases/individual/data/xkeyboard-config/$(XKB_CONFIG_VERSION).tar.xz
+build_xkeyboard_config:
+	@echo "Installing XKB keyboard layouts..."
+	@if [ ! -f $(TMPDIR)/$(XKB_CONFIG_VERSION).tar.xz ]; then wget -P $(TMPDIR) $(XKB_CONFIG_URL); fi
+	@if [ ! -d $(TMPDIR)/$(XKB_CONFIG_VERSION) ]; then tar -C $(TMPDIR) -xf $(TMPDIR)/$(XKB_CONFIG_VERSION).tar.xz; fi
+	
+	# Since this is mostly just text files, we can use standard meson without a strict cross-file
+	cd $(TMPDIR)/$(XKB_CONFIG_VERSION) && \
+	meson setup build --prefix=/usr
+	
+	ninja -C $(TMPDIR)/$(XKB_CONFIG_VERSION)/build
+	DESTDIR=$(DISKDIR) ninja -C $(TMPDIR)/$(XKB_CONFIG_VERSION)/build install
+
+LIBUDEV_ZERO_GIT = https://github.com/illiliti/libudev-zero.git
+
+build_libudev:
+	@echo "Building libudev-zero..."
+	@if [ ! -d $(TMPDIR)/libudev-zero ]; then cd $(TMPDIR) && git clone $(LIBUDEV_ZERO_GIT); fi
+	
+	$(MAKE) -C $(TMPDIR)/libudev-zero \
+		LDFLAGS="-L$(DISKDIR)/lib/x86_64-dioOS-gnu -L$(DISKDIR)/usr/lib -Wl,-rpath-link=$(DISKDIR)/lib/x86_64-dioOS-gnu" \
+		CPPFLAGS="-I$(DISKDIR)/usr/include" \
+		CFLAGS="-I$(DISKDIR)/usr/include" \
+		AR="$(TOOLCHAIN_DIR)/bin/$(TARGET_ARCH)-ar" \
+		PREFIX=/usr \
+		all
+		
+	$(MAKE) -C $(TMPDIR)/libudev-zero \
+		PREFIX=/usr \
+		DESTDIR=$(DISKDIR) \
+		install
+
+# xkbcomp (The actual keyboard compiler binary!)
+XKBCOMP_VERSION = xkbcomp-1.4.6
+XKBCOMP_URL = https://www.x.org/releases/individual/app/$(XKBCOMP_VERSION).tar.xz
+
+build_xkbcomp: build_libxkbfile
+	@echo "Building xkbcomp..."
+	@if [ ! -f $(TMPDIR)/$(XKBCOMP_VERSION).tar.xz ]; then wget -P $(TMPDIR) $(XKBCOMP_URL); fi
+	@if [ ! -d $(TMPDIR)/$(XKBCOMP_VERSION) ]; then tar -C $(TMPDIR) -xf $(TMPDIR)/$(XKBCOMP_VERSION).tar.xz; fi
+	
+	cd $(TMPDIR)/$(XKBCOMP_VERSION) && \
+	PKG_CONFIG_PATH="$(DISKDIR)/usr/lib/pkgconfig:$(DISKDIR)/usr/share/pkgconfig:$(DISKDIR)/lib/x86_64-dioOS-gnu/pkgconfig" \
+	PKG_CONFIG_SYSROOT_DIR="$(DISKDIR)" \
+	LDFLAGS="-L$(DISKDIR)/lib/x86_64-dioOS-gnu -L$(DISKDIR)/usr/lib -Wl,-rpath-link=$(DISKDIR)/lib/x86_64-dioOS-gnu" \
+	CPPFLAGS="-I$(DISKDIR)/usr/include" \
+	CFLAGS="-I$(DISKDIR)/usr/include" \
+	AR="$(TOOLCHAIN_DIR)/bin/$(TARGET_ARCH)-ar" \
+	PREFIX=/usr \
+	./configure \
+		--prefix=/usr \
+		--host=$(TARGET_ARCH) \
+		--with-sysroot=$(DISKDIR) \
+		--with-xkb-config-root=/usr/share/X11/xkb
+	
+	$(MAKE) -C $(TMPDIR)/$(XKBCOMP_VERSION) -j$(NPROC)
+	$(MAKE) -C $(TMPDIR)/$(XKBCOMP_VERSION) DESTDIR=$(DISKDIR) install
+
+
+build_xorg: build_xinit build_openssl build_pixman build_libxkbfile build_libxcvt build_freetype build_libfontenc build_libXdmcp build_libXfont2 build_zlib build_xorg_server build_macros \
+	build_xf86_video_fbdev build_libudev build_xf86_input_evdev build_xkbcomp build_xkeyboard_config

@@ -1,0 +1,1 @@
+Fix whatever is going on with self->exit in elf.cpp

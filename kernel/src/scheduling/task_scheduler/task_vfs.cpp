@@ -33,7 +33,7 @@ int read_task_stat(uint64_t offset, uint64_t length, void* buffer, vnode_t* this
     int l = stringf((char*)buffer, length, "%d (%s) %c %d %d %d 0 0 %d 0 0 0 0 %d %d %d %d %d %d %d %d %d %d %d", 
         task->pid, task->executable_name, state, task->ppid, task->pgid, task->sid, 0 /* Process Flags */,
         task->cpu_time, 0 /* Time in kernel mode */, 0 /* cstime? */, 0 /* priority */, 0 /* nice */,
-        0 /* num_threads */, 0, task->start_time, task->vm_tracker.total_marked_memory, task->vm_tracker.total_marked_memory / 0x1000,
+        0 /* num_threads */, 0, task->start_time, task->vm_tracker->total_marked_memory, task->vm_tracker->total_marked_memory / 0x1000,
         UINT64_MAX);
 
     return l;
@@ -47,14 +47,16 @@ int task_vfs_unlink(vnode_t *this_node){
 }
 
 void _add_dynamic_task_virtual_files(task_t *task){
-    vnode_t *stat = new vnode_t(VREG);
-    strcpy(stat->name, "stat");
+    char buff[128];
+    stringf(buff, sizeof(buff), "/proc/%d/stat", task->pid);
 
-    stat->file_operations.unlink = task_vfs_unlink;
-    stat->file_operations.read = read_task_stat;
-    stat->fs_identifier = (uint64_t)task;
-
-    vfs::add_node(task->proc_vfs_dir, stat);
+    vnode_t *stat = vfs::create_path(buff, VREG);
+    if (stat){
+        stat->file_operations.unlink = task_vfs_unlink;
+        stat->file_operations.read = read_task_stat;
+        stat->fs_identifier = (uint64_t)task;
+        stat->close();
+    }
 }
 
 
@@ -115,22 +117,18 @@ int _read_proc_meminfo(uint64_t offset, uint64_t length, void* buffer, vnode_t* 
 }
 
 void _init_cpu_proc_fs(){
-    vnode_t *proc = vfs::resolve_path("/proc");
-    if (!proc) return;
+    vnode_t *stat = vfs::create_path("/proc/stat", VREG);
+    if (stat){
+        stat->file_operations.unlink = task_vfs_unlink;
+        stat->file_operations.read = _read_proc_stat;
+        stat->close();
+    }
 
-    vnode_t *stat = new vnode_t(VREG);
-    strcpy(stat->name, "stat");
+    vnode_t *meminfo = vfs::create_path("/proc/meminfo", VREG);
 
-    stat->file_operations.unlink = task_vfs_unlink;
-    stat->file_operations.read = _read_proc_stat;
-
-    vfs::add_node(proc, stat);
-
-    vnode_t *meminfo = new vnode_t(VREG);
-    strcpy(meminfo->name, "meminfo");
-
-    meminfo->file_operations.unlink = task_vfs_unlink;
-    meminfo->file_operations.read = _read_proc_meminfo;
-
-    vfs::add_node(proc, meminfo);
+    if (meminfo){
+        meminfo->file_operations.unlink = task_vfs_unlink;
+        meminfo->file_operations.read = _read_proc_meminfo;
+        meminfo->close();
+    }
 }

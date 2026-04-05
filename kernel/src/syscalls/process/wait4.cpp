@@ -54,7 +54,11 @@ long sys_wait4(int pid, int *wstatus, int options, struct rusage *rusage) {
             return 0;
 
         self->Block(WAIT_FOR_CHILD, pid);
-
+        
+        if (self->signal_count == 0 && self->woke_by_signal){
+            return -EINTR;
+        }
+        
         if (pid == -1){
             for (task_t* t = task_scheduler::task_list; t != nullptr; t = t->next){
                 if (t == self) continue;

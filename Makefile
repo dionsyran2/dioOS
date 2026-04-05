@@ -84,3 +84,23 @@ cleanall:
 	rm -rf $(BOOTDIR)/$(LIMINE_DIR)
 	rm -rf $(BOOTDIR)/$(LIMINE_TARBALL)
 	@$(MAKE) clean
+
+run:
+	qemu-system-x86_64 \
+	-machine q35 \
+	-m 4G \
+	-smp cores=1 \
+	-cpu max \
+	-drive file=$(DISK) \
+	-drive if=pflash,format=raw,unit=0,file="/OVMFbin/OVMF_CODE-pure-efi.fd",readonly=on \
+	-drive if=pflash,format=raw,unit=1,file="/OVMFbin/OVMF_VARS-pure-efi.fd" \
+	-device intel-hda,debug=0 \
+	-device hda-output,audiodev=snd0 \
+	-audiodev dsound,id=snd0 \
+	-device qemu-xhci,id=xhci \
+	-nic user,model=e1000e \
+	-monitor stdio \
+	-trace usb_xhci_ \
+	-d guest_errors \
+	--no-reboot \
+	--no-shutdown

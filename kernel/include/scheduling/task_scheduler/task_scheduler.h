@@ -49,7 +49,9 @@ enum task_block_type_t{
     MEMORY_NON_ZERO = 6,
 
     /* EVENTS */
-    WAITING_ON_EVENT = 7
+    WAITING_ON_EVENT = 7,
+
+    WAITING_ON_FUTEX = 8
 };
 
 struct task_t;
@@ -65,6 +67,50 @@ struct fd_t{
 
     fd_t* next;
 };
+
+
+typedef uint64_t kernel_sigset_t;
+typedef void (*__sighandler_t)(int signal);
+
+#define SA_NOCLDSTOP	0x00000001
+#define SA_NOCLDWAIT	0x00000002
+#define SA_SIGINFO	    0x00000004
+
+#define SIG_DFL	((__sighandler_t)0)	/* default signal handling */
+#define SIG_IGN	((__sighandler_t)1)	/* ignore signal */
+#define SIG_ERR	((__sighandler_t)-1)	/* error return from signal */
+
+union sigval {
+	int sival_int;
+	void *sival_ptr;
+};
+
+typedef struct {
+	int si_signo;
+	int si_code;
+	union sigval si_value;
+	int si_errno;
+	pid_t si_pid;
+	uid_t si_uid;
+	void *si_addr;
+	int si_status;
+	int si_band;
+} siginfo_t;
+
+
+struct kernel_sigaction {
+    union {
+        void (*sa_handler)(int);
+        void (*sa_sigaction)(int, void*, void*);
+    };
+    uint64_t sa_flags;         // Must be 8 bytes (unsigned long in kernel)
+    void (*sa_restorer)(void); // The trampoline address
+    uint64_t sa_mask;          // The mask is ALWAYS at the end in the kernel!
+};
+
+
+struct vm_tracker_t;
+struct PageTableManager;
 
 struct task_t{
     task_t* next;
@@ -94,7 +140,15 @@ struct task_t{
     uid_t suid; // Saved user id
     gid_t sgid; // Saved group id
 
-    int* tid_address;
+    // Signals
+    kernel_sigset_t pending_signals;
+    kernel_sigset_t kernel_signals; // To identify which signals are sent by the kernel (for si_code)
+    kernel_sigset_t signal_mask;
+    kernel_sigaction signal_actions[64];
+
+    uint32_t* clear_child_tid;
+
+    bool signal_parent_on_exit;
     
     int counter;
 
@@ -104,8 +158,7 @@ struct task_t{
     uint64_t start_time; // In ticks
     
     // vmm tracker
-    bool vm_mirror;
-    vm_tracker_t vm_tracker; // Any allocation, should be included here
+    vm_tracker_t *vm_tracker; // Any allocation, should be included here
 
     // ptm
     PageTableManager* ptm;
@@ -123,9 +176,12 @@ struct task_t{
 
     uint64_t fs_pointer;
     __registers_t registers; // The registers saved during a context switch
-    __registers_t saved_registers; // Saved, perhaps for a signal
     __registers_t *syscall_registers; // Saved during a syscall
+    bool executing_syscall; // Whether rip points to userspace or kernel code
 
+    int signal_count;
+    bool woke_by_signal;
+    
     __stack_t kernel_stack_top; // kernel stack
     __stack_t user_stack_top; // the user stack
     __stack_t syscall_stack_top; // syscall stack
@@ -135,10 +191,6 @@ struct task_t{
     uint64_t userspace_return_address; // Where to return execution after the syscall (used for clone/fork)
     
     void* saved_fpu_state;
-
-    uint64_t brk_offset;
-    uint64_t rmap_offset;
-    uint64_t kmap_offset;
 
     // Expose to Userspace (/proc)
     vnode_t* proc_vfs_dir;
@@ -156,8 +208,9 @@ struct task_t{
     void UnallocatePage(void* page); // Free and unmark from vm_tracker*/
     void ScheduleFor(int64_t ms, task_state_t state, task_block_type_t block_type = UNSPECIFIED, uint64_t block_context = 0);
     void Block(task_block_type_t block_type, uint64_t context);
+    void Unblock();
     char* read_string(void* address, size_t max_length);
-    bool read_memory(void* address, void* buffer, size_t length);
+    bool read_memory(const void* address, void* buffer, size_t length);
     bool write_memory(void* address, const void* buffer, size_t length);
     void exit(int status, bool silent = false); // Silent will not wake up any tasks waiting (To be used when cloning for execve)
 
@@ -184,8 +237,9 @@ namespace task_scheduler
     void scheduler_tick(__registers_t* regs, bool change_task = false);
 
     void wake_blocked_tasks(task_block_type_t block_type);
-    task_t* get_process(tid_t tgid);
-    
+    task_t* get_process(pid_t pid);
+    task_t *get_thread(tid_t tgid, pid_t pid);
+        
     task_t* clone_for_execve(task_t* task);
 
     // Internal
@@ -193,6 +247,7 @@ namespace task_scheduler
     void _add_task_to_list(task_t* task);
     void _remove_task_from_list(task_t* task);
     void _wake_waiting_tasks(pid_t pid);
+    void _handle_signals(task_t *task);
 
 } // namespace task_scheduler
 

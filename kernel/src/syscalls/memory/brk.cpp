@@ -4,38 +4,38 @@
 
 uint64_t sys_brk(uint64_t brk){
     task_t* self = task_scheduler::get_current_task();
+    uint64_t current_brk = BRK_DEFAULT_BASE + self->vm_tracker->brk_offset;
 
-    if (brk > (BRK_DEFAULT_BASE + self->brk_offset)){
-        uint64_t pages = DIV_ROUND_UP(brk - (BRK_DEFAULT_BASE + self->brk_offset), PAGE_SIZE);
+    if (brk == 0 || brk == current_brk) {
+        return current_brk;
+    }
 
-        for (int i = 0; i < pages; i++){
-            uint64_t kvirt = (uint64_t)GlobalAllocator.RequestPage();
-            memset((void*)kvirt, 0, PAGE_SIZE);
-            uint64_t physical = virtual_to_physical(kvirt);
-            uint64_t virt = BRK_DEFAULT_BASE + self->brk_offset;
+    if (brk > current_brk){
+        uint64_t current_mapped_end = (current_brk + 0xFFF) & ~0xFFF;
+        uint64_t new_mapped_end = (brk + 0xFFF) & ~0xFFF;
 
-            self->vm_tracker.mark_allocation(virt, 0x1000, VM_FLAG_COW | VM_FLAG_US | VM_FLAG_RW);
-            self->ptm->MapMemory((void*)virt, (void*)physical);
-            self->ptm->SetFlag((void*)virt, PT_Flag::User, true);
-            self->brk_offset += 0x1000;
+        if (new_mapped_end > current_mapped_end) {
+            uint64_t size_to_map = new_mapped_end - current_mapped_end;
+
+            self->vm_tracker->mark_allocation(current_mapped_end, size_to_map, VM_FLAG_COW | VM_FLAG_US | VM_FLAG_RW);
+
+            for (uint64_t i = 0; i < size_to_map; i += 0x1000){
+                uint64_t virt = current_mapped_end + i;
+                
+                uint64_t kvirt = (uint64_t)GlobalAllocator.RequestPage();
+                memset((void*)kvirt, 0, PAGE_SIZE);
+                uint64_t physical = virtual_to_physical(kvirt);
+
+                self->ptm->MapMemory((void*)virt, (void*)physical);
+                self->ptm->SetFlag((void*)virt, PT_Flag::User, true);
+                self->ptm->SetFlag((void*)virt, PT_Flag::Write, true);
+            }
         }
-    } /*else {
-        uint64_t pages = DIV_ROUND_UP((BRK_DEFAULT_BASE + self->brk_offset) - brk, PAGE_SIZE);
+    }
 
-        for (int i = 0; i < pages; i++){
-            if (self->brk_offset == 0) break;
+    self->vm_tracker->brk_offset = brk - BRK_DEFAULT_BASE;
 
-            uint64_t virt = BRK_DEFAULT_BASE + self->brk_offset;
-
-            self->vm_tracker.remove_allocation(virt, 0x1000);
-            uint64_t physical = self->ptm->getPhysicalAddress((void*)virt);
-            GlobalAllocator.DecreaseReferenceCount((void*)physical);
-
-            self->ptm->Unmap((void*)virt);
-            self->brk_offset -= 0x1000;
-        }
-    }*/
-
-    return BRK_DEFAULT_BASE + self->brk_offset;
+    return brk;
 }
+
 REGISTER_SYSCALL(SYS_brk, sys_brk);

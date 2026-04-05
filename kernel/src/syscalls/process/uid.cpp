@@ -28,21 +28,18 @@ long sys_setuid(int uid){
 REGISTER_SYSCALL(SYS_setuid, sys_setuid);
 
 
-long sys_setresuid(int ruid, int euid, int suid){
+long sys_setresuid(int ruid, int euid, int suid) {
     task_t* self = task_scheduler::get_current_task();
 
-    if (self->euid != 0 && ruid != self->ruid && ruid != self->euid && ruid != self->suid)
-        return -EPERM;
-        
-    if (self->euid != 0 && euid != self->ruid && euid != self->euid && euid != self->suid)
-        return -EPERM;
+    if (self->euid != 0) {
+        if (ruid != -1 && ruid != self->ruid && ruid != self->euid && ruid != self->suid) return -EPERM;
+        if (euid != -1 && euid != self->ruid && euid != self->euid && euid != self->suid) return -EPERM;
+        if (suid != -1 && suid != self->ruid && suid != self->euid && suid != self->suid) return -EPERM;
+    }
 
-    if (self->euid != 0 && suid != self->ruid && suid != self->euid && suid != self->suid)
-        return -EPERM;
-
-    self->ruid = ruid;
-    self->euid = euid;
-    self->suid = suid;
+    if (ruid != -1) self->ruid = ruid;
+    if (euid != -1) self->euid = euid;
+    if (suid != -1) self->suid = suid;
     return 0;
 }
 

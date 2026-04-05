@@ -11,6 +11,13 @@
 #include <syscalls/files/ioctl.h>
 #include <drivers/timers/common.h>
 
+void dump_all_tasks() {
+    serialf("--- SCHEDULER TASK DUMP ---\n");
+    for (task_t* t = task_scheduler::task_list; t != nullptr; t = t->next) {
+        serialf("NAME: %s | PID: %d | State: %d \n", t->name, t->pid, t->task_state);
+    }
+}
+
 int vt_read(uint64_t offset, uint64_t length, void* buffer, vnode_t* this_node){
     virtual_terminal *vt = (virtual_terminal*)this_node->fs_identifier;
 
@@ -251,6 +258,10 @@ char virtual_terminal::vt_process_event(struct input_event *ev) {
 
     if (ev->value == 0) return 0; // Ignore releases for printing
 
+    if (ev->code == KEY_F12){
+        dump_all_tasks();
+    }
+
     // --- Handle Numpad Specifics ---
     switch (ev->code) {
         // Constant Arithmetic Keys
@@ -308,6 +319,10 @@ void vt_input_task(virtual_terminal* vt){
     input_event t;
 
     while(1){
+        if (!tst) {
+            self->exit(-1);
+        }
+
         tst->read(0, sizeof(t), &t);
         
         char c = vt->vt_process_event(&t);
@@ -477,7 +492,6 @@ virtual_terminal::virtual_terminal(drivers::GraphicsDriver* driver){
     this->offset_y = 0;
 
     char path[128];
-    vnode_t* dev = vfs::resolve_path("/dev");
 
     int i = 0;
     while(1){
@@ -490,11 +504,7 @@ virtual_terminal::virtual_terminal(drivers::GraphicsDriver* driver){
             continue;
         }
 
-        node = new vnode_t(VCHR);
-        stringf(node->name, sizeof(node->name), "tty%d", i);
-
-        vfs::add_node(dev, node);
-        dev->close();
+        node = vfs::create_path(path, VCHR);
         break;
     }
     node->ready_to_receive_data = true;
@@ -579,7 +589,7 @@ void virtual_terminal::clear(){
     // Clear the array
     for (uint16_t y = 0; y < height; y++){
         for (uint16_t x = 0; x < width; x++){
-            set_cell(offset_x, offset_y, ' ', current_attributes, current_fg, current_bg);
+            set_cell(x, y, ' ', current_attributes, current_fg, current_bg);
         }
     }
 
@@ -964,7 +974,7 @@ void kprint(const char* str, size_t len = 0){
 void kprintfva(const char* str, va_list args) {
     uint64_t rflags = spin_lock(&main_vt->output_lock);
 
-    const uint64_t buffer_size = 2048;
+    const uint64_t buffer_size = 1024;
     char buffer[buffer_size];
     int written = vsnprintf_(buffer, buffer_size, str, args);
     kprint(buffer, written);

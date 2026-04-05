@@ -191,7 +191,7 @@ void load_header(task_t* task, uint64_t base, void* file, program_header64* hdr)
         flags |= VM_FLAG_US;
         flags |= VM_FLAG_COW;
 
-        task->vm_tracker.mark_allocation(v_addr, PAGE_SIZE, flags);
+        task->vm_tracker->mark_allocation(v_addr, PAGE_SIZE, flags);
     }
 
     uint8_t* dest = (uint8_t*)m + offset;
@@ -224,7 +224,6 @@ task_t* execute_elf(vnode_t* node, int argc, char* argv[], char* exec_path){
     elf64_ehdr* exec_ehdr = (elf64_ehdr*)exec_file;
 
     if (node->read(0, node->size, exec_file) < 0) {free(exec_file); return nullptr;}
-    
     if (!verify_header(exec_ehdr)) {free(exec_file); return nullptr;}
 
     task_t* task = task_scheduler::create_process(exec_path, nullptr, true, true, true);
@@ -233,9 +232,9 @@ task_t* execute_elf(vnode_t* node, int argc, char* argv[], char* exec_path){
     char* interp_path = get_interpreter(exec_file);
 
     uint64_t lowest_exec_address = 0;
+
     uint64_t exec_entry = load_in_memory(task, 0, exec_file, &lowest_exec_address);
     uint64_t task_entry = exec_entry;
-
     if (interp_path){
 
         vnode_t* interpreter = vfs::resolve_path(interp_path);
@@ -297,11 +296,18 @@ task_t* execute_elf(vnode_t* node, int argc, char* argv[], char* exec_path){
     }
 
     vnode_t* tty = vfs::resolve_path("/dev/tty0");
+
     if (tty){
         task->open_node(tty, 0);
+
+        tty->open();
         task->open_node(tty, 1);
+
+        tty->open();
         task->open_node(tty, 2);
     }
+    
+    
 
     task->entry = (function)task_entry;
     node->close();
@@ -374,6 +380,7 @@ int kexecve(const char* pathname, int argc, const char* argv[], int envc, const 
             free(executable_buffer);
             executable->close();
             task->exit(true);
+            kprintf("ENOENT %s\n", interpreter_path); 
             return -ENOENT;
         }
 

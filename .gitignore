@@ -1,0 +1,48 @@
+# Object and binary files
+*.o
+*.bin
+*.iso
+*.elf
+*.img
+*.vmdk
+
+*.lck # lock files
+*.lck/
+
+# Build folders
+tmp
+bootloader/grub-*
+bootloader/limine*
+*.tar.*
+bootloader/BOOTX64.EFI
+applications/bin
+applications/lib
+kernel/bin
+kernel/lib
+glibc
+mnt
+setup/tmp
+toolchain
+
+# Logs
+*.log
+
+# Batch files
+*.bat
+
+# vscode stuff
+*.code-workspace
+*.vscode
+
+# Ignore everything in disk/
+disk
+
+# But keep specific files
+!disk/etc/
+!disk/etc/passwd
+!disk/etc/shadow
+!disk/etc/inittab
+!disk/etc/profile
+# Keep all fonts
+!disk/fonts/
+!disk/fonts/**

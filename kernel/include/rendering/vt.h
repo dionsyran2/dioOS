@@ -32,6 +32,8 @@ struct vt_cell{
     uint32_t bg;
 };
 
+struct task_t;
+
 struct virtual_terminal{
     vt_cell* cell_table;
 

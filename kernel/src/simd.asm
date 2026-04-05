@@ -51,16 +51,22 @@ _enable_sse:
     test rax, rax
     jz .failed
 
-    ; 1. Modify CR0 (Clear EM, Set MP)
+    ; Modify CR0 (Clear EM, Set MP)
     mov rax, cr0
     and ax, 0xFFFB      ; Clear Coprocessor Emulation (Bit 2)
     or ax, 0x2          ; Set Monitor Coprocessor (Bit 1)
     mov cr0, rax
 
-    ; 2. Modify CR4 (Set OSFXSR, OSXMMEXCPT)
+    ; Modify CR4 (Set OSFXSR, OSXMMEXCPT)
     mov rax, cr4
     or rax, (1 << 9) | (1 << 10)
     mov cr4, rax
+
+    ; Enable XSAVE in CR4 (Bit 18)
+    mov rax, cr4
+    or rax, 1 << 18
+    mov cr4, rax
+
 
     mov rax, 1          ; Explicit Success Return
     ret
@@ -78,17 +84,17 @@ _enable_avx:
     test rax, rax
     jz .failed
 
-    ; 1. AVX requires SSE enabled first
+    ; AVX requires SSE enabled first
     call _enable_sse
     test rax, rax       ; Check if SSE failed
     jz .failed
 
-    ; 2. Enable XSAVE in CR4 (Bit 18)
+    ; Enable XSAVE in CR4 (Bit 18)
     mov rax, cr4
     or rax, 1 << 18
     mov cr4, rax
 
-    ; 3. Setup XCR0 (Enable X87, SSE, AVX states)
+    ; Setup XCR0 (Enable X87, SSE, AVX states)
     push rcx            ; Save C++ caller registers just in case
     push rdx
     
@@ -138,17 +144,17 @@ _check_avx512_support:
 ; Returns: 1 (True) on success, 0 (False) if unsupported
 ; -----------------------------------------------------------------------------
 _enable_avx512:
-    ; 1. AVX-512 requires standard AVX (and SSE) enabled first
+    ; AVX-512 requires standard AVX (and SSE) enabled first
     call _enable_avx
     test rax, rax
     jz .failed
 
-    ; 2. Check if CPU physically supports AVX-512
+    ; Check if CPU physically supports AVX-512
     call _check_avx512_support
     test rax, rax
     jz .failed
 
-    ; 3. Setup XCR0 for ZMM State
+    ; Setup XCR0 for ZMM State
     ; We need to enable 3 new bits:
     ; Bit 5: Opmask (k0-k7 registers)
     ; Bit 6: ZMM_Hi256 (The upper 256 bits of ZMM0-ZMM15)

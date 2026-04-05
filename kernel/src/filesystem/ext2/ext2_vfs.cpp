@@ -78,7 +78,14 @@ int ext2_vnode_write(uint64_t offset, uint64_t length, const void* buffer, vnode
     filesystems::ext2_t* fs = (filesystems::ext2_t*)this_node->fs_identifier;
     this_node->last_modified = current_time;
 
-    return fs->write_inode_contents(this_node->inode, offset, length, buffer);
+    int ret = fs->write_inode_contents(this_node->inode, offset, length, buffer);
+
+    ext2_inode_t* self = fs->fetch_inode(this_node->inode);
+    this_node->size = fs->get_inode_size(self);
+
+    delete self;
+
+    return ret;
 }
 
 int ext2_vnode_truncate(uint64_t new_size, vnode_t* this_node){
@@ -188,8 +195,11 @@ void ext2_save_metadata(vnode_t* this_node){
     delete inode;
 }
 
+int ext2_vnode_find_file(const char *filename, vnode_t** out, vnode_t* this_node);
+
 vnode_ops_t ext2_dir_ops = {
     .read_dir = ext2_vnode_read_dir,
+    .find_file = ext2_vnode_find_file,
     .mkdir = ext2_vnode_mkdir,
     .creat = ext2_vnode_creat,
     .rmdir = ext2_vnode_rmdir,

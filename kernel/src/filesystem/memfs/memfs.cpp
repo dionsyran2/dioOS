@@ -46,6 +46,17 @@ int memfs_read(uint64_t offset, uint64_t length, void* buffer, vnode_t* this_nod
     return to_read;
 }
 
+char* memfs_read_link(vnode_t* this_node){
+    if (this_node->type != VLNK) return nullptr;
+
+    int size = this_node->size;
+    char *buffer = (char *)malloc(size + 1);
+    this_node->read(0, size, buffer);
+    buffer[size] = '\0';
+
+    return buffer;
+}
+
 
 int memfs_write(uint64_t offset, uint64_t length, const void* buffer, vnode_t* this_node){
     if (this_node->type == VDIR) return -EISDIR;
@@ -113,9 +124,8 @@ int memfs_unlink(vnode_t* this_node){
     filesystems::memfs::memfs_file_t* file = (filesystems::memfs::memfs_file_t*)this_node->file_identifier;
     file->to_be_removed = true;
 
-    vfs::rm_node(this_node->parent, this_node);
-
-    this_node->virtual_file = false;
+    this_node->close(); // Close that reference we opened when we created this file.
+    if (this_node->parent) this_node->parent->_remove_child(this_node);
 
     if (this_node->ref_count == 0) {
         memfs_cleanup(this_node);
@@ -128,7 +138,11 @@ int memfs_unlink(vnode_t* this_node){
 int memfs_rmdir(vnode_t* this_node){
     for (vnode_t* child = this_node->children; child != nullptr;){
         vnode_t *next = child->next;
-        child->unlink();
+        if (child->type == VDIR) {
+            child->rmdir();
+        } else {
+            child->unlink();
+        }
         child = next;
     }
 
@@ -145,6 +159,7 @@ int memfs_mkdir(char* name, vnode_t* this_node);
 int memfs_creat(char* name, vnode_t* this_node);
 
 vnode_ops_t memfs_ops = {
+    .read_link = memfs_read_link,
     .read = memfs_read,
     .write = memfs_write,
     .truncate = memfs_truncate,
@@ -188,7 +203,8 @@ int memfs_mkdir(char* name, vnode_t* this_node){
     strcpy(node->name, name);
     memcpy(&node->file_operations, &memfs_ops, sizeof(node->file_operations));
 
-    vfs::add_node(this_node, node);
+    this_node->_add_child(node);
+    node->open(); // Keep it open to prevent it from being deleted
     return 0;
 }
 
@@ -223,9 +239,11 @@ int memfs_creat(char* name, vnode_t* this_node){
     strcpy(node->name, name);
     memcpy(&node->file_operations, &memfs_ops, sizeof(node->file_operations));
 
-    vfs::add_node(this_node, node);
+    this_node->_add_child(node);
+    node->open(); // Keep it open to prevent it from being deleted
     return 0;
 }
+
 namespace filesystems{
     namespace memfs{
         vnode_t* create_memfs(){
@@ -240,6 +258,30 @@ namespace filesystems{
             node->file_identifier = (uint64_t)file_info;
 
             memcpy(&node->file_operations, &memfs_ops, sizeof(node->file_operations));
+            return node;
+        }
+
+        vnode_t *create_abstract_file(){
+            vnode_t* node = new vnode_t(VREG);
+
+            if (!node) return nullptr;
+
+            filesystems::memfs::memfs_file_t* file_info = new filesystems::memfs::memfs_file_t;
+
+            if (!file_info) {
+                delete node;
+                return nullptr;
+            }
+
+            file_info->buffer = nullptr;
+            file_info->buffer_size = 0;
+            file_info->file_lock = 0;
+            file_info->to_be_removed = false;
+
+            node->file_identifier = (uint64_t)file_info;
+
+            memcpy(&node->file_operations, &memfs_ops, sizeof(node->file_operations));
+
             return node;
         }
     }

@@ -1,6 +1,7 @@
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_to_name.h>
 #include <memory/heap.h>
+#include <cpu.h>
 
 #define LOG_SYSCALLS
 
@@ -18,8 +19,15 @@ syscall_function find_syscall(int id){
 
 extern "C" uint64_t handle_syscall(__registers_t* registers){
     task_t* self = task_scheduler::get_current_task();
+    save_fpu_state(self->saved_fpu_state); // Imagine chasing memory corruption, all because I never saved the fpu state
+    self->executing_syscall = true;
+
     self->syscall_registers = registers;
     self->userspace_return_address = registers->rip;
+
+    if (self->signal_count == 0 && self->woke_by_signal){
+        self->woke_by_signal = false;
+    }
 
     syscall_function entry = find_syscall(registers->rax);
     if (entry == nullptr){
@@ -27,9 +35,13 @@ extern "C" uint64_t handle_syscall(__registers_t* registers){
             registers->rsi, registers->rdx, registers->r10, registers->r8, registers->r9);
         
         registers->rax = -ENOSYS;
+
+        asm ("cli");
+        self->executing_syscall = false;
         return -ENOSYS;
     }
-    
+
+    serialf("%d / %d\n", self->pid, registers->rax);
     unsigned long ret = entry(registers->rdi, registers->rsi, registers->rdx,
         registers->r10, registers->r8, registers->r9);
 
@@ -39,7 +51,9 @@ extern "C" uint64_t handle_syscall(__registers_t* registers){
     uint64_t args[6] = {registers->rdi, registers->rsi, registers->rdx,
         registers->r10, registers->r8, registers->r9}; 
 
-    serialf("%d | %s(", self->pid, syscall_to_name(registers->rax));
+    char buffer[256];
+    memset(buffer, 0, sizeof(buffer));
+    stringf(buffer, sizeof(buffer), "%d | %s(", self->pid, syscall_to_name(registers->rax));
     int arg_type[6];
     memset(arg_type, 0, 6 * sizeof(int));
     syscall_args(registers->rax, arg_type);
@@ -48,28 +62,50 @@ extern "C" uint64_t handle_syscall(__registers_t* registers){
         if (arg_type[i] == 0) break;
         switch (arg_type[i]){
             case 1:
-                serialf("%p", args[i]);
+                stringf(buffer, sizeof(buffer), "%s%p", buffer, args[i]);
                 break;
             case 2:{
                 char *string = self->read_string((char*)args[i], 512);
 
-                serialf("'%s'", string);
+                stringf(buffer, sizeof(buffer), "%s'%s'", buffer, string);
 
                 free(string);
                 break;
             }
             case 3:
-                serialf("%d", args[i]);
+                stringf(buffer, sizeof(buffer), "%s%d", buffer, args[i]);
                 break;
         }
 
-        if (i != 6 && arg_type[i + 1]) serialf(", ");
+        if (i != 6 && arg_type[i + 1]) stringf(buffer, sizeof(buffer), "%s, ", buffer);
     }
 
-    serialf(") = %ld %s\n\r", ret, ((int) ret) >= 0 ? "" : ERRNO_NAME(- ((int)ret)));
+    stringf(buffer, sizeof(buffer), "%s) = %ld %s\n\r", buffer, ret, ((int) ret) >= 0 ? "" : ERRNO_NAME(- ((int)ret)));
+    serialf(buffer);
     #endif
 
     registers->rax = ret;
+    restore_fpu_state(self->saved_fpu_state);
+
+    asm ("cli");
+
+    // Hijack the return process to return to the signal handler! (If a signal is pending ofcourse)
+    if (self->pending_signals & ~self->signal_mask) {
+        registers->rip = registers->rcx;
+        registers->rflags = registers->r11;
+
+        memcpy(&self->registers, registers, sizeof(__registers_t));
+        
+        task_scheduler::_handle_signals(self);
+        
+        self->registers.r11 = self->registers.rflags;
+        self->registers.rcx = self->registers.rip;
+        memcpy(registers, &self->registers, sizeof(__registers_t));
+    }
+
+
+
+    self->executing_syscall = false;
     return ret;
 }
 

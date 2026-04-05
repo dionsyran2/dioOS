@@ -146,14 +146,17 @@ void ExpandHeap(size_t size){
 
 }
 
+#include <panic.h>
 void fix_corrupted_stack(){
-    for (heap_header *segment = heap_start; segment != nullptr; segment = segment->next){
+    panic("Heap corruption detected!\n");
+    
+    /*for (heap_header *segment = heap_start; segment != nullptr; segment = segment->next){
         if ((uint64_t)segment->next < HEAP_BASE && segment->next != nullptr) {
             segment->next = nullptr;
             heap_end = segment;
             break;
         }
-    }
+    }*/
 }
 
 heap_header* find_free_segment(size_t size){
@@ -219,6 +222,8 @@ void free(void* memory){
     uint64_t rflags = spin_lock(&heap_lock);
 
     if (segment->free) {
+        int *r = (int*)0xDEADBEEF;
+        *r = 0;
         serialf("\e[0;31m DOUBLE FREE!\e[0m\n");
         
         // Optional: Report double free error

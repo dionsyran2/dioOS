@@ -32,6 +32,12 @@ long sys_mkdir(char *fn, unsigned long mode){
         return -ENOTDIR;
     }
     int ret = pnode->mkdir(name);
+
+    // Perms
+    vnode_t *node = vfs::resolve_path(pathname);
+    node->permissions = mode ? mode : 0777;
+    node->save_metadata();
+    node->close();
     
     free(parent);
     free(name);

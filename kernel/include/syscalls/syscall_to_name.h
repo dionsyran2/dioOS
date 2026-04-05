@@ -57,7 +57,11 @@ inline const char* syscall_to_name(int sysnum){
         case 40: return "sendfile";
         case 41: return "socket";
         case 42: return "connect";
+        case 43: return "accept";
         case 44: return "sendto";
+        case 48: return "shutdown";
+        case 49: return "bind";
+        case 50: return "listen";
         case 56: return "clone";
         case 57: return "fork";
         case 58: return "vfork";
@@ -73,6 +77,7 @@ inline const char* syscall_to_name(int sysnum){
         case 81: return "fchdir";
         case 83: return "mkdir";
         case 85: return "creat";
+        case 87: return "unlink";
         case 89: return "readlink";
         case 91: return "chmod";
         case 92: return "chown";
@@ -113,6 +118,7 @@ inline const char* syscall_to_name(int sysnum){
         case 262: return "fstatat";
         case 269: return "faccessat";
         case 270: return "pselect6";
+        case 291: return "epoll_create1";
         case 293: return "pipe2";
         case 302: return "prlimit64";
         case 318: return "getrandom";
@@ -153,6 +159,8 @@ inline void syscall_args(int sysnum, int out[]){
         case 40: out[0] = 1; out[1] = 1; out[2] = 1; out[3] = 1; break;
         case 42: out[0] = 3; out[1] = 1; out[2] = 3; break;
         case 44: out[0] = 3; out[1] = 1; out[2] = 3; out[3] = 3; out[4] = 1; out[5] = 3; break;
+        case 48: out[0] = 3; out[1] = 3; break;
+        case 49: out[0] = 3; out[1] = 1; out[2] = 3; break;
         case 56: out[0] = 1; out[1] = 1; out[2] = 1; out[3] = 1; out[4] = 1; break;
         case 59: out[0] = 2; out[1] = 1; out[2] = 1; break;
         case 61: out[0] = 1; out[1] = 1; out[2] = 1; out[3] = 1; break;
@@ -166,6 +174,7 @@ inline void syscall_args(int sysnum, int out[]){
         case 81: out[0] = 1; break;
         case 83: out[0] = 2; out[1] = 1; break;
         case 85: out[0] = 2; out[1] = 1; break;
+        case 87: out[0] = 2; break;
         case 89: out[0] = 2; out[1] = 1; out[2] = 3; break;
         case 91: out[0] = 3; out[1] = 3; break;
         case 92: out[0] = 2; out[1] = 3; out[2] = 3; break;
@@ -202,6 +211,7 @@ inline void syscall_args(int sysnum, int out[]){
         case 262: out[0] = 3; out[1] = 2; out[2] = 1; out[3] = 3; break;
         case 269: out[0] = 1; out[1] = 2; out[2] = 1; break;
         case 270: out[0] = 1; out[1] = 1; out[2] = 1; out[3] = 1; out[4] = 1; out[5] = 1; break;
+        case 291: out[0] = 3; break;
         case 293: out[0] = 1; out[1] = 1; break;
         case 318: out[0] = 1; out[1] = 3; out[2] = 3; break;
         case 439: out[0] = 1; out[1] = 2; out[2] = 1; out[3] = 1; break;

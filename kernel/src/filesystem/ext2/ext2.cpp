@@ -30,6 +30,93 @@ vnode_type_t get_inode_type(ext2_inode_t* inode){
     return VREG; 
 }
 
+int ext2_vnode_find_file(const char *filename, vnode_t** out, vnode_t* this_node){
+    if (this_node->type != VDIR) return -ENOTDIR;
+
+    filesystems::ext2_t* fs = (filesystems::ext2_t*)this_node->fs_identifier;
+
+    int filename_length = strlen(filename);
+
+    uint64_t chunk_size = 4096;
+    uint8_t* buffer = (uint8_t*)malloc(chunk_size);
+    uint64_t file_offset = 0;
+
+    *out = nullptr;
+
+    while (true) {
+        // Read a chunk of the directory file
+        int64_t bytes_read = fs->load_inode_contents(this_node->inode, file_offset, chunk_size, buffer);
+        
+        // Stop if EOF (read 0 bytes) or Error (< 0)
+        if (bytes_read <= 0) break;
+
+        uint64_t buffer_pos = 0;
+        bool brk = false;
+
+        while (buffer_pos < bytes_read) {
+            // Get pointer to current entry
+            ext2_directory_entry_t* entry = (ext2_directory_entry_t*)(buffer + buffer_pos);
+
+            // Corrupted filesystem loop prevention
+            if (entry->entry_size == 0) break; 
+
+            // Process valid entries
+            if (entry->inode != 0) {
+                uint32_t len = entry->name_size_low; 
+                
+                // Check the type and create a vnode entry
+                ext2_inode_t* inode = fs->fetch_inode(entry->inode);
+                if (inode && (filename_length == len && memcmp(entry->name, filename, len) == 0)){
+                    vnode_type_t type = get_inode_type(inode);
+
+                    vnode_t* vnode = new vnode_t(type);
+                    uint32_t name_len = min(len, sizeof(vnode->name) - 1);
+                    memcpy(vnode->name, entry->name, name_len);
+                    vnode->name[name_len] = '\0';
+
+                    vnode->fs_identifier = this_node->fs_identifier;
+                    vnode->inode = entry->inode;
+                    vnode->size = fs->get_inode_size(inode);
+                    
+                    vnode->permissions = inode->type_permissions & 0xFFF;
+                    vnode->uid = inode->owner_uid;
+                    vnode->gid = inode->owner_gid;
+                    vnode->last_accessed = inode->last_access_time;
+                    vnode->last_modified = inode->last_modification_time;
+                    vnode->creation_time = inode->change_time;
+                    vnode->next = nullptr;
+                    vnode->parent = this_node;
+                    
+                    if (type == VDIR){
+                        memcpy(&vnode->file_operations, &ext2_dir_ops, sizeof(vnode->file_operations));
+                    }else {
+                        memcpy(&vnode->file_operations, &ext2_file_ops, sizeof(vnode->file_operations));
+                    }
+
+                    *out = vnode;
+
+                    delete inode;
+
+                    brk = true;
+                    break;
+                }
+            }
+
+            if (brk) break;
+            // Advance position inside the buffer
+            buffer_pos += entry->entry_size;
+        }
+
+        // Advance the global file offset by what we actually read
+        file_offset += bytes_read;
+    }
+
+    free(buffer);
+
+    return *out ? 0 : -ENOENT;
+}
+
+
 int ext2_vnode_read_dir(vnode_t** out, vnode_t* this_node){
     if (this_node->type != VDIR) return -ENOTDIR;
 

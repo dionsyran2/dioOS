@@ -18,8 +18,9 @@ long sys_dup2(int oldfd, int newfd){
     fd_t* nfd = self->get_fd(newfd);
     if (nfd != nullptr) sys_close(newfd); // attempt to close the new fd
 
+    ofd->node->open();
     fd_t* fd = self->open_node(ofd->node, newfd);
-    fd->flags = ofd->flags;
+    fd->flags = ofd->flags & (~O_CLOEXEC);
     fd->node->size = ofd->node->size;
     fd->offset = ofd->offset;
     return fd->num;
@@ -36,8 +37,9 @@ long sys_dup(int oldfd){
         return -EBADF;
     }
 
+    ofd->node->open();
     fd_t* fd = self->open_node(ofd->node);
-    fd->flags = ofd->flags;
+    fd->flags = ofd->flags & (~O_CLOEXEC);;
     fd->node->size = ofd->node->size;
     fd->offset = ofd->offset;
     return fd->num;

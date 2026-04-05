@@ -4,6 +4,8 @@
 #include <syscalls/files/helpers.h>
 #include <alloca.h>
 
+#define MAX_ARG_STRLEN 4096
+
 long sys_execve(const char *pathname, char *const argv[], char *const envp[]){
     task_t* self = task_scheduler::get_current_task();
     char path[2048];
@@ -41,7 +43,7 @@ long sys_execve(const char *pathname, char *const argv[], char *const envp[]){
 
         if (arg_address == 0) break;
 
-        char* heap_buffer = self->read_string((void*)arg_address, 100);
+        char* heap_buffer = self->read_string((void*)arg_address, MAX_ARG_STRLEN);
         char* stack_buffer = (char*)alloca(strlen(heap_buffer) + 1);
         strcpy(stack_buffer, heap_buffer);
 
@@ -55,7 +57,7 @@ long sys_execve(const char *pathname, char *const argv[], char *const envp[]){
 
         if (env_address == 0) break;
 
-        char* heap_buffer = self->read_string((void*)env_address, 100);
+        char* heap_buffer = self->read_string((void*)env_address, MAX_ARG_STRLEN);
         char* stack_buffer = (char*)alloca(strlen(heap_buffer) + 1);
         strcpy(stack_buffer, heap_buffer);
 

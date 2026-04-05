@@ -17,7 +17,7 @@
 #define SYS_brk                     12
 #define SYS_sigaction               13
 #define SYS_sigprocmask             14
-#define SYS_sigreturn				15
+#define SYS_rt_sigreturn			15
 #define SYS_ioctl                   16
 #define SYS_pread64				    17
 #define SYS_readv					19
@@ -33,7 +33,11 @@
 #define SYS_sendfile				40
 #define SYS_socket					41
 #define SYS_connect					42
+#define SYS_accept                  43
 #define SYS_sendto					44
+#define SYS_shutdown                48
+#define SYS_bind                    49
+#define SYS_listen                  50
 #define SYS_clone					56
 #define SYS_fork                    57
 #define SYS_vfork					58
@@ -52,9 +56,11 @@
 #define SYS_creat					85
 #define SYS_unlink                  87
 #define SYS_readlink				89
+#define SYS_chmod                   90
 #define SYS_fchmod					91
 #define SYS_chown					92
 #define SYS_fchown					93
+#define SYS_lchown                  94
 #define SYS_gettimeofday			96
 #define SYS_getrlimits				97
 #define SYS_ptrace					101
@@ -84,7 +90,7 @@
 #define SYS_futex					202
 #define SYS_getaffinity				204
 #define SYS_getdents64				217
-#define SYS_settidaddr              218
+#define SYS_set_tid_address         218
 #define SYS_clock_gettime           228
 #define SYS_clocknanosleep			230
 #define SYS_exitgroup               231
@@ -94,6 +100,7 @@
 #define SYS_newfstatat				262
 #define SYS_faccessat               269
 #define SYS_pselect					270
+#define SYS_epoll_create            291
 #define SYS_pipe2					293
 #define SYS_prlimit					302
 #define SYS_getrandom				318

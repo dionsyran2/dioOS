@@ -87,27 +87,10 @@ size_t event_node_t::read(char* buffer, size_t count) {
 }
 
 void init_event_fs(){
-    vnode_t* dev = vfs::resolve_path("/dev");
-
-    if (!dev){
-        kprintf("[EVENT FS] Could not resolve '/dev'\n");
-        return;
-    }
-
-    vnode_t* input = vfs::resolve_path("/dev/input");
-    if (!input){
-        dev->mkdir("input");
-        input = vfs::resolve_path("/dev/input");
-    }
-
-    input->creat("event0");
-    vnode_t* evt = vfs::resolve_path("/dev/input/event0");
+    vnode_t* evt = vfs::create_path("/dev/input/event0", VCHR);
 
     if (evt){
         new event_node_t(evt);
         evt->close();
     }
-    
-    input->close();
-    dev->close();
 }

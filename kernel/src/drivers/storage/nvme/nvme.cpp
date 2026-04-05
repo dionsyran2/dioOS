@@ -110,18 +110,13 @@ namespace drivers{
 
         // Create a node to represent this device
         // Currently no I/O operations are supported on this device directly
-        this->vnode = new vnode_t(VBLK);
-        stringf(this->vnode->name, sizeof(this->vnode->name), "nvme%d", this->nvme_driver_id); // Copy the name
-        
-        vnode_t* dev_dir = vfs::resolve_path("/dev");
-        if (dev_dir == nullptr){
-            kprintf("[NVMe] Could not resolve path '/dev'\n");
-        }else{
-            vfs::add_node(dev_dir, this->vnode);
-            
-            // Close our reference to /dev
-            dev_dir->close();
-        }
+        char pathname[128];
+
+        stringf(pathname, sizeof(pathname), "/dev/nvme%d", this->nvme_driver_id);
+        this->vnode = vfs::create_path(pathname, VBLK);
+        memset(&this->vnode->file_operations, 0, sizeof(this->vnode->file_operations));
+
+        this->vnode->close();        
 
         kprintf("\e[0;32m[NVMe]\e[0m Driver initialized successfully!\n");
         return true;
@@ -613,26 +608,20 @@ namespace drivers{
         GlobalAllocator.FreePage(response);
 
         // Create a node to represent this device
-        this->vnode = new vnode_t(VBLK);
+        char pathname[128];
+        stringf(pathname, sizeof(pathname), "/dev/%sn%d", this->driver->vnode->name, this->identifier); // Copy the name
+
+        this->vnode = vfs::create_path(pathname, VBLK);
         this->vnode->fs_identifier = (uint64_t)this;
         this->vnode->io_block_size = this->lba_size;
         this->vnode->size = this->lba_size * this->amount_of_lbas;
         
-        stringf(this->vnode->name, sizeof(this->vnode->name), "%sn%d", this->driver->vnode->name, this->identifier); // Copy the name
         memcpy(&this->vnode->file_operations, &nvme_namespace_operations, sizeof(vnode_ops_t));
 
 
-        vnode_t* dev_dir = vfs::resolve_path("/dev");
-        if (dev_dir == nullptr){
-            kprintf("[NVMe] Could not resolve path '/dev'\n");
-        }else{
-            vfs::add_node(dev_dir, this->vnode);
-
-            intialize_disk_partitions(this->vnode);
-            
-            // Close our reference to /dev
-            dev_dir->close();
-        }
+        intialize_disk_partitions(this->vnode);
+        
+        this->vnode->close();
         return;
     }
 

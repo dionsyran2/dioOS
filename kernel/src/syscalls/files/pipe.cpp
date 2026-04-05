@@ -32,10 +32,10 @@ long pipe2(int pipefd[2], int flags){
     pipe_t *pipe = create_pipe();
 
     fd_t *read = self->open_node(pipe->read_node);
-    //read->flags = flags | O_RDONLY;
+    read->flags |= flags;// | O_RDONLY;
 
     fd_t *write = self->open_node(pipe->write_node);
-    //write->flags = flags | O_WRONLY;
+    write->flags |= flags;// | O_WRONLY;
 
     int out[2];
     out[0] = read->num;

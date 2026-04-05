@@ -14,91 +14,13 @@ PageTableManager::PageTableManager(PageTable* PML4, vm_tracker_t* vm_tracker){
     this->vm_tracker = vm_tracker;
 }
 
-void CopyPTM(PageTableManager* dst, PageTableManager* src){
-    // Variables to hold the base virtual address components calculated at each level
-    uint64_t virt_base_pml4; 
-    uint64_t virt_base_pdp;  
-    uint64_t virt_base_pt;   
-
-    // --- Level 4: PML4 (Page Directory Pointer Table) ---
-    for (int PDP_i = 0; PDP_i < 512; PDP_i++) {
-        auto* PDPEntry = &src->PML4->entries[PDP_i];
-        if (!PDPEntry->is_flag_set(PT_Flag::Present)) continue;
-
-        auto* PDP = (PageTable*)physical_to_virtual(PDPEntry->get_address());
-        
-        // Calculate the base virtual address for this PML4 entry (Bits 39-47)
-        virt_base_pml4 = (uint64_t)PDP_i << 39;
-
-        // --- Level 3: PDP (Page Directory Table) ---
-        for (int PD_i = 0; PD_i < 512; PD_i++) {
-            auto* PDEntry = &PDP->entries[PD_i];
-            if (!PDEntry->is_flag_set(PT_Flag::Present)) continue;
-
-            auto* PD = (PageTable*)physical_to_virtual(PDEntry->get_address());
-            
-            // Calculate the base virtual address for this PDP entry (Bits 30-38)
-            // This combines the L4 component (pml4) and the L3 component (pdp)
-            virt_base_pdp = virt_base_pml4 | ((uint64_t)PD_i << 30);
-
-            // --- Level 2: PD (Page Table) ---
-            for (int PT_i = 0; PT_i < 512; PT_i++) {
-                auto* PTEntry = &PD->entries[PT_i];
-                if (!PTEntry->is_flag_set(PT_Flag::Present)) continue;
-                
-                auto* PT = (PageTable*)physical_to_virtual(PTEntry->get_address());
-
-                // Calculate the base virtual address for this PT entry (Bits 21-29)
-                // This combines L4, L3, and the L2 component (pt)
-                virt_base_pt = virt_base_pdp | ((uint64_t)PT_i << 21);
-
-                // --- Level 1: Page ---
-                for (int P_i = 0; P_i < 512; P_i++) {
-                    auto* P = &PT->entries[P_i];
-                    if (!P->is_flag_set(PT_Flag::Present)) continue;
-
-                    // Final virtual address calculation (Bits 12-20)
-                    uint64_t virtualAddress = virt_base_pt | ((uint64_t)P_i << 12);
-                    dst->SetMapping((void*)virtualAddress, P->value);
-                }
-            }
-        }
-    }
-}
 void ClonePTM(PageTableManager* dst, PageTableManager* src){
     // Copy the Kernel Mappings
     memcpy(&dst->PML4->entries[256], &src->PML4->entries[256], sizeof(PageEntry[256]));
 
     if (!dst->vm_tracker || !src->vm_tracker) return;
 
-    copy_vmm(dst->vm_tracker, src->vm_tracker);
-
-    // - Copy VMMs
-    for (vm_struct* vm = src->vm_tracker->vm_list; vm != nullptr; vm = vm->next){
-        if (vm->flags & VM_FLAG_DO_NOT_SHARE) continue;
-
-        for (uint64_t pg = 0; pg < vm->size; pg += 0x1000){
-            uint64_t virt = vm->address + pg;
-            uint64_t physical = src->getPhysicalAddress((void*)virt);
-            
-            if ((vm->flags & VM_FLAG_COW) != 0){
-                // Mark as pending
-                int nflags = vm->flags | VM_PENDING_COW;
-                vm->flags = nflags;
-                dst->vm_tracker->change_flags(virt, 0x1000, nflags);
-                //src->vm_tracker->change_flags(virt, 0x1000, nflags);
-                
-                src->SetFlag((void*)virt, PT_Flag::Write, false); // Mark as RO
-            }
-            dst->SetMapping((void*)virt, src->getMapping((void*)virt));
-
-            if (src->GetFlag((void*)virt, User)){
-                dst->SetFlag((void*)virt, User, true);
-            }
-            // Add a reference
-            GlobalAllocator.IncreaseReferenceCount((void*)physical);
-        }
-    }
+    src->vm_tracker->copy_as_cow(src, dst->vm_tracker, dst);
 }
 
 // A wrapper to allocate a page

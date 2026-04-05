@@ -4,6 +4,14 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <limine.h>
+#include <sys/mman.h>
+#define MAP_FIXED	0x10
+#define MAP_SHARED	0x01		/* Share changes.  */
+#define MAP_PRIVATE	0x02		/* Changes are private.  */
+#define PROT_READ	0x1		/* Page can be read.  */
+#define PROT_WRITE	0x2		/* Page can be written.  */
+#define PROT_EXEC	0x4		/* Page can be executed.  */
+#define PROT_NONE	0x0		/* Page can not be accessed.  */
 
 // @brief Rounds upwards
 #define ROUND_UP(x, y)  ((((x) + ((y) - 1)) / (y)) * (y))
@@ -31,3 +39,4 @@ extern "C" void *memmove(void *dest, const void *src, size_t n);
 extern "C" void *memcpy(void* __restrict__ dest, const void* __restrict__ src, size_t n);
 
 void log_memory_usage();
+

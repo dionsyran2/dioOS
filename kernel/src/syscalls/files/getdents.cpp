@@ -24,39 +24,29 @@ int64_t sys_getdents64(int fd, void* dirp, size_t count){
     linux_dirent64 dirent;
     int offset = 0;
     
-    vnode_t* tnode = nullptr;
-    int cnt = ofd->node->read_dir(&tnode);
+    dirent_t* entries = nullptr;
+    int cnt = ofd->node->read_dir(&entries);
 
     if (cnt <= 0) return cnt;
 
     if (ofd->offset >= cnt){
         ofd->offset = 0;
-        while(tnode != nullptr){
-            vnode_t* prev = tnode;
-            tnode = tnode->next;
-        }
         return 0;
     }
 
-    if (ofd->offset){
-        for (int i = 0; i < ofd->offset; i++){
-            tnode = tnode->next;
-            if (tnode == nullptr) break;
-        }
-    }
-
-    while(tnode != nullptr){
+    int entry_offset = ofd->offset;
+    for (int i = 0; i < cnt - entry_offset; i++){
         if ((offset + sizeof(linux_dirent64)) >= count){
             break;
         }
 
-        vnode_t* node = tnode;
+        dirent_t node = entries[entry_offset + i];
 
         memset(&dirent, 0, sizeof(dirent));
         
-        dirent.d_ino = (unsigned long)node;
+        dirent.d_ino = node.inode;
         dirent.d_reclen = sizeof(linux_dirent64);
-        switch (node->type){
+        switch (node.type){
             case VBLK:
                 dirent.d_type = DT_BLK;
                 break;
@@ -83,17 +73,16 @@ int64_t sys_getdents64(int fd, void* dirp, size_t count){
                 break;
         }
 
-        strcpy(dirent.d_name, node->name);
+        strcpy(dirent.d_name, node.name);
         
         self->write_memory((void*)((uint64_t)dirp + offset), &dirent, sizeof(linux_dirent64));
         
         offset += sizeof(linux_dirent64);
 
-
         ofd->offset++;
-        vnode_t* prev = tnode;
-        tnode = tnode->next;
     }
+
+    free(entries);
 
     return offset;
 }

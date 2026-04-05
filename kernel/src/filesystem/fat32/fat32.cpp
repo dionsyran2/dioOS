@@ -121,6 +121,8 @@ int fat32_vnode_unlink(vnode_t* this_node){
     return 0;
 }
 
+int fat32_vnode_find_file(const char *filename, vnode_t** out, vnode_t* this_node);
+
 vnode_ops_t fat32_file_operations = {
     .read = fat32_vnode_read,
     .write = fat32_vnode_write,
@@ -130,12 +132,109 @@ vnode_ops_t fat32_file_operations = {
 
 vnode_ops_t fat32_dir_operations = {
     .read_dir = fat32_vnode_read_dir,
+    .find_file = fat32_vnode_find_file,
     .mkdir = fat32_vnode_mkdir,
     .creat = fat32_vnode_creat,
     .rmdir = fat32_vnode_unlink,
     .cleanup = fat32_vnode_cleanup,
 };
 
+int fat32_vnode_find_file(const char *filename, vnode_t **out, vnode_t *this_node){
+    if (this_node->type != VDIR) return 0;
+
+    filesystems::fat32_t* fs = (filesystems::fat32_t*)this_node->fs_identifier;
+
+    uint32_t cluster = 0;
+    if (this_node->file_identifier == 0){
+        cluster = fs->get_root_dir_cluster();
+    } else {
+        // Read the entry and get its first cluster
+        fat32_vnode_info_t* file_info = (fat32_vnode_info_t*)this_node->file_identifier;
+        
+        cluster = file_info->start_cluster;
+    }
+
+
+    uint64_t buffer_size = fs->get_total_size(cluster);
+
+    fat_directory_entry_t* entry_table = (fat_directory_entry_t*)malloc(buffer_size);
+    if (!entry_table) return 0;
+
+    if (!fs->read_contents(cluster, 0, buffer_size, entry_table)){
+        free(entry_table);
+        return 0;
+    }
+
+    bool lfn_found = false;
+    char lfn_buffer[512];
+    char sfn_buffer[13];
+    uint8_t expected_checksum = 0;
+
+    for (fat_directory_entry_t* entry = entry_table; entry->name[0] != 0; ) {        
+        if ((unsigned char)entry->name[0] == 0xE5) {
+            lfn_found = false;
+            entry++;
+            continue;
+        }
+
+        if (entry->attributes == FAT_LFN) {
+            memset(lfn_buffer, 0, sizeof(lfn_buffer));
+            entry = fat32_helper_parse_lfn(entry, lfn_buffer, &expected_checksum);
+            lfn_found = true;
+            continue; 
+        }
+
+        if (lfn_found) {
+            uint8_t actual_checksum = lfn_checksum((uint8_t*)entry->name);
+            if (actual_checksum != expected_checksum) {
+                lfn_found = false; 
+            }
+        }
+        
+        char* entry_name = lfn_found ? lfn_buffer : sfn_buffer;
+        if (!lfn_found) fat32_parse_sfn(entry, sfn_buffer); 
+
+        if (strcmp(filename, entry_name)) {
+            lfn_found = false;
+            entry++;
+            continue;
+        }
+
+        vnode_t* node = new vnode_t(entry->attributes & FAT_DIR ? VDIR : VREG);
+        strcpy(node->name, entry_name);
+        node->parent = this_node;
+
+        node->permissions = 0777; // FAT32 has no permission support, let alone unix permissions.
+        node->io_block_size = this_node->io_block_size;
+        
+        node->fs_identifier = (uint64_t)fs;
+
+        fat32_vnode_info_t* file_info = new fat32_vnode_info_t;
+        file_info->parent_start_cluster = cluster;
+        file_info->start_cluster = ((uint32_t)entry->first_cluster_high << 16) | entry->first_cluster_low;
+        memcpy(file_info->sfn_name, entry->name, 11);
+
+        node->file_identifier = (uint64_t)file_info;
+        
+        node->size = entry->file_size;
+        
+        // Add time and date stuff
+
+        // Copy the operation table
+        if (node->type == VDIR){
+            memcpy(&node->file_operations, &fat32_dir_operations, sizeof(node->file_operations));
+        } else {
+            memcpy(&node->file_operations, &fat32_file_operations, sizeof(node->file_operations));
+        }
+
+        *out = node;
+        break;
+    }
+
+    free(entry_table);
+
+    return *out ? 0 : -ENOENT;
+}
 
 int fat32_vnode_read_dir(vnode_t** out, vnode_t* this_node){
     if (this_node->type != VDIR) return 0;
@@ -941,7 +1040,6 @@ namespace filesystems {
         strcpy(node->name, "FAT32_ROOT_NODE");
 
         node->permissions = 0777; // FAT32 has no permission support, let alone unix permissions.
-        node->fs_root_node = true; // I have no use for this yet, but you never know.
         node->io_block_size = this->bios_parameter_block.bytes_per_sector;
         
         node->fs_identifier = (uint64_t)this;

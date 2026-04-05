@@ -20,7 +20,7 @@ BUILDDIR = bin
 
 rwildcard=$(foreach d,$(wildcard $(1:=/*)),$(call rwildcard,$d,$2) $(filter $(subst *,%,$2),$d))
 
-INCLUDE_DIRS = $(SRCDIR)/uACPI/include $(SRCDIR)/../include
+INCLUDE_DIRS = $(SRCDIR)/../include
 INCLUDE_FLAGS = $(addprefix -I,$(INCLUDE_DIRS))
 SRC = $(call rwildcard,$(SRCDIR),*.cpp)
 CSRC = $(call rwildcard,$(SRCDIR),*.c)
@@ -98,7 +98,7 @@ $(OBJDIR)/%.o: $(SRCDIR)/%.c
 	@ mkdir -p $(@D)
 	@ $(CC) $(CFLAGS) -c $^ -o $@
 
-link:
+link: $(OBJS)
 	@ printf "\e[0;36mLinking\e[0m\n"
 	@ $(LD) $(LDFLAGS) -o $(BUILDDIR)/kernel.elf $(OBJS)
 

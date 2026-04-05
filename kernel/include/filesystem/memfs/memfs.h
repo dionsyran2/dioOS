@@ -14,5 +14,6 @@ namespace filesystems{
         };
 
         vnode_t* create_memfs();
+        vnode_t *create_abstract_file();
     }
 }

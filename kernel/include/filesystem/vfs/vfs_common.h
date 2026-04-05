@@ -39,6 +39,7 @@ struct vnode_ops_t{
     // @warning For directories only
     // @brief Puts a linked list in ret and returns the amount of entries.
     int (*read_dir)(vnode_t** ret, vnode_t* this_node);
+    int (*find_file)(const char *filename, vnode_t **ret, vnode_t *this_node);
 
     // @brief Creates a directory
     int (*mkdir)(char* name, vnode_t* this_node);
@@ -67,23 +68,28 @@ struct vnode_ops_t{
     void (*unmount)(vnode_t* this_node);
     // @brief Sync changes to the disk
     void (*sync)(vnode_t* this_node);
+
+    // --- Other stuff --- //
+    unsigned long (*mmap)(void *addr, size_t length, int prot, int flags, int fd, uint64_t offset, vnode_t* this_node);
+};
+
+
+struct dirent_t{
+    unsigned long inode;
+    vnode_type_t type;
+    char name[128];
 };
 
 struct vnode_t{
     char name[128];
 
     vnode_type_t type;
-    uint32_t ref_count;
 
-    // Do not mess up the child chain :)
-    spinlock_t child_list_lock;
+    uint32_t ref_count;
 
     // Waiting
     bool ready_to_receive_data;
     bool data_ready_to_read;
-    
-    // @brief Do not clear it when ref_count reaches 0
-    bool virtual_file;
     
     // --- Permissions --- //
     uint16_t permissions; // e.g., 0755 (rwxr-xr-x)
@@ -102,15 +108,10 @@ struct vnode_t{
     uint64_t io_block_size;
 
     // --- Type Specific --- //
-    bool fs_root_node;
-    bool is_mounted;
-    vnode_t* mount_point;
-
-    bool is_mount_point;
-    vnode_t* mounted_on;
+    vnode_t* mount_point; // The detour destination, a redirection you could say
+    vnode_t* mounted_on; // If this is the destination, where does it start?
 
     bool directory_cached;
-    bool should_cache_directory;
 
     // --- Locks --- //
     int lock_owner;
@@ -125,10 +126,14 @@ struct vnode_t{
     uint64_t file_identifier; // An identifier for the file
 
     // --- List --- //
-    vnode_t* children; /* If its a directory */
-    vnode_t* next;
-    vnode_t* parent;
-    vnode_t* real_node; // If this is a copy, it points to the real node. Otherwise 0
+    vnode_t *next;
+    vnode_t *previous;
+    spinlock_t list_lock;
+
+    // --- Tree --- //
+    vnode_t *children; /* If its a directory */
+    vnode_t *last_children;
+    vnode_t *parent;
 
     // --- Methods --- //
     // @brief Constructor
@@ -154,8 +159,8 @@ struct vnode_t{
     int find_file(const char* filename, vnode_t** ret);
 
     // @warning For directories only
-    // @brief Puts a linked list in ret and returns the amount of entries.
-    int read_dir(vnode_t** ret);
+    // @brief Returns an array of dirent_t entries
+    int read_dir(dirent_t** ret);
 
     // @brief Create a directory
     // @warning For directories only
@@ -177,4 +182,16 @@ struct vnode_t{
     int close();
 
     int ioctl(int op, char* argp);
+
+    int mount(vnode_t *detour);
+
+
+    void _cache_dir();
+    void _uncache_dir(); // After the refcnt reaches 0, it is called (0 means also every child is closed)
+    
+    void _add_child(vnode_t *child);
+    void _remove_child(vnode_t *child, bool lock_held = false);
+    int _increase_refcount();
+    int _decrease_refcount();
+    void _cleanup();
 };

@@ -1,8 +1,104 @@
 /* Graphics Output Protocol (provided by the uefi firmware... its just a normal framebuffer) */
 #include <drivers/graphics/gop.h>
 #include <paging/PageFrameAllocator.h>
+#include <filesystem/vfs/vfs.h>
 #include <memory.h>
+#include <cstr.h>
 #include <math.h>
+#include <kerrno.h>
+#include <kstdio.h>
+
+
+unsigned long mmap_fb_gop(void *addr, size_t length, int prot, int flags, int fd, uint64_t offset, vnode_t* this_node) {
+    drivers::GOP *gop = (drivers::GOP*)this_node->file_identifier;
+
+    task_t* self = task_scheduler::get_current_task();
+    
+    size_t page_count = (length + 0xFFF) / 0x1000;
+    length = page_count * 0x1000;
+
+    bool find_new_addr = (addr == nullptr);
+    if (!find_new_addr && (flags & MAP_FIXED) == 0) {
+        find_new_addr = true;
+    }
+
+    if (find_new_addr) {
+        addr = (void*)(RMAP_DEFAULT_BASE + self->vm_tracker->rmap_offset);
+        self->vm_tracker->rmap_offset += length;
+    }
+
+    self->vm_tracker->mark_allocation((uint64_t)addr, length, VM_FLAG_DONT_FREE | VM_FLAG_SHARED); // Don't free the vram... that would be bad
+
+    uint64_t phys_base = virtual_to_physical((uint64_t)gop->framebuffer) + offset;
+
+    for (size_t i = 0; i < length; i += 0x1000) {
+        void* vaddr = (void*)((unsigned long)addr + i);
+        uint64_t physical = phys_base + i;
+
+        self->ptm->MapMemory(vaddr, (void*)physical);
+        
+        self->ptm->SetFlag(vaddr, PT_Flag::User, true);
+        self->ptm->SetFlag(vaddr, PT_Flag::Write, true);
+        self->ptm->SetFlag(vaddr, PT_Flag::CacheDisable, true); 
+        self->ptm->SetFlag(vaddr, PT_Flag::WriteThrough, true);
+    }
+
+    return (unsigned long)addr;
+}
+
+int fb_gop_ioctl(int op, char* argp, vnode_t* this_node){
+    task_t *self = task_scheduler::get_current_task();
+
+    drivers::GOP *gop = (drivers::GOP*)this_node->file_identifier;
+    
+    if (op == FBIOGET_FSCREENINFO) {
+        fb_fix_screeninfo fix;
+        memset(&fix, 0, sizeof(fix));
+        
+        strncpy(fix.id, "dioOS FB", 15);
+        fix.smem_start = virtual_to_physical((uint64_t)gop->framebuffer); // The physical address of the framebuffer
+        fix.smem_len = gop->pitch * gop->height;
+        fix.type = 0;   // FB_TYPE_PACKED_PIXELS
+        fix.visual = 2; // FB_VISUAL_TRUECOLOR
+        fix.line_length = gop->pitch;
+        
+        self->write_memory(argp, &fix, sizeof(fix));
+        return 0;
+    }
+
+    if (op == FBIOGET_VSCREENINFO) {
+        fb_var_screeninfo var;
+        memset(&var, 0, sizeof(var));
+        
+        var.xres = gop->width;
+        var.yres = gop->height;
+        var.xres_virtual = gop->width;
+        var.yres_virtual = gop->height;
+        var.bits_per_pixel = gop->bits_per_pixel;
+        
+        // Define the BGRA/RGBA color offsets
+        var.red.offset = 16;    var.red.length = 8;
+        var.green.offset = 8;   var.green.length = 8;
+        var.blue.offset = 0;    var.blue.length = 8;
+        var.transp.offset = 24; var.transp.length = 8;
+        
+        // Copy to userspace
+        self->write_memory(argp, &var, sizeof(var));
+        return 0; // Success!
+    }
+
+    if (op == FBIOPUT_VSCREENINFO) {
+        // The user application is trying to set the resolution. 
+        // We can't dynamically change GOP resolution, 
+        // so we just pretend we successfully applied it!
+        // What could possibly go wrong? Have it render only on
+        // part of the screen?
+        return 0;
+    }
+
+    return -EINVAL;
+}
+
 
 namespace drivers{
     GOP::GOP(limine_framebuffer* fb){
@@ -28,6 +124,42 @@ namespace drivers{
         this->backbuffer = (uint32_t*)GlobalAllocator.RequestPages(DIV_ROUND_UP(total_size, 0x1000));
         memset(this->backbuffer, 0, total_size);
         memset(this->framebuffer, 0, total_size);
+
+        char buffer[64];
+        
+        // Register the framebuffer to the filesystem
+        int i = 0;
+        while (1){
+            stringf(buffer, sizeof(buffer), "/dev/fb%d", i);
+
+            vnode_t *file = vfs::resolve_path(buffer);
+            if (!file){
+                file = vfs::create_path(buffer, VCHR);
+                file->file_identifier = (uint64_t)this;
+                file->file_operations.mmap = mmap_fb_gop;
+                file->file_operations.ioctl = fb_gop_ioctl;
+                file->permissions = 0777;
+                stringf(file->name, sizeof(file->name), "fb%d", i);
+                
+                file->close();
+
+                stringf(buffer, sizeof(buffer), "/sys/class/graphics/fb%d", i);
+                vnode_t *sysfile = vfs::create_path(buffer, VREG);
+                sysfile->type = VLNK;
+
+                int r = stringf(buffer, sizeof(buffer), "/sys/devices/fb%d", i);
+                sysfile->write(0, r, buffer);
+                sysfile->close();
+
+                stringf(buffer, sizeof(file->name), "/sys/devices/fb%d", i);
+                vnode_t *sys_devices = vfs::create_path(buffer, VDIR);
+                sys_devices->close();
+                break;
+            }
+            
+            file->close();
+            i++;
+        }
     }
 
     void GOP::PlotPixel(uint16_t x, uint16_t y, uint32_t color){

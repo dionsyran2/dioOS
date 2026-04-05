@@ -12,97 +12,159 @@
 #define MAX_SYMLINK_DEPTH 8
 #define PATH_SEPARATOR "/"
 
-void vnode_remove_from_child_list(vnode_t* parent, vnode_t* child, bool lock = true){
-    // Acquire the child list lock
-    uint32_t rflags;
-    if (lock) rflags = spin_lock(&parent->child_list_lock);
-
-    if (parent->children == child) {
-        parent->children = child->next;
-        if (lock) spin_unlock(&parent->child_list_lock, rflags);
-        return;
+void vnode_t::_add_child(vnode_t *child){
+    uint64_t rflags = spin_lock(&this->list_lock);
+    
+    // Append the child to the list
+    if (!this->children){
+        this->children = child;
+        child->next = nullptr;
+        child->previous = nullptr;
+    } else {
+        child->next = nullptr;
+        child->previous = this->last_children;
+        this->last_children->next = child;
     }
 
-    vnode_t* prev = nullptr;
-    for (vnode_t* chd = parent->children; chd != nullptr; chd = chd->next){
-        if (chd == child){
-            prev->next = chd->next;
-            break;
-        }
-        prev = chd;
-    }
-    if (lock) spin_unlock(&parent->child_list_lock, rflags);
+    this->last_children = child;
+    child->parent = this;
+
+    spin_unlock(&this->list_lock, rflags);
 }
 
-void vnode_add_to_child_list(vnode_t* parent, vnode_t* child){
-    child->next = nullptr;
-    if (parent->children == nullptr){
-        parent->children = child;
-        return;
+void vnode_t::_remove_child(vnode_t *child, bool lock_held){
+    uint64_t rflags = 0;
+    if (!lock_held) rflags = spin_lock(&this->list_lock);
+    
+    if (this->last_children == child) this->last_children = child->previous;
+
+    // Remove it from the list
+    if (this->children == child){
+        this->children = child->next;
+        if (this->children) this->children->previous = nullptr;
+    } else {
+        // Patch the list
+        if (child->previous) child->previous->next = child->next;
+        if (child->next) child->next->previous = child->previous;
     }
 
-    vnode_t* last = parent->children;
-    while (last->next) {
-        if (last == child) {
-             return;
+    // Explicitly sever the child's ties to the list to prevent ghost pointers
+    child->next = nullptr;
+    child->previous = nullptr;
+
+    // Removed!
+    if (!lock_held) spin_unlock(&this->list_lock, rflags);
+}
+
+int vnode_t::_increase_refcount(){
+    return __atomic_add_fetch(&this->ref_count, 1, __ATOMIC_SEQ_CST);
+}
+
+int vnode_t::_decrease_refcount(){
+    return __atomic_sub_fetch(&this->ref_count, 1, __ATOMIC_SEQ_CST);
+}
+
+void vnode_t::_cleanup(){
+    if (this->file_operations.cleanup) this->file_operations.cleanup(this);
+
+    delete this;
+}
+
+void vnode_t::_cache_dir(){
+    if (this->directory_cached) return;
+    if (!this->file_operations.read_dir) return;
+
+    vnode_t *list = nullptr;
+    int count = this->file_operations.read_dir(&list, this);
+
+    for (vnode_t* current = list; current != nullptr;){
+
+        // Check if its already in the child list
+        vnode_t *t = nullptr;
+        this->find_file(current->name, &t);
+
+        if (t) {
+            // It somehow already exists, skip it for our own good
+            t->close();
+            vnode_t *next = current->next;
+            current->_cleanup();
+            current = next;
+            continue;
         }
-        last = last->next;
+        
+        // Add it to the list. Store the next pointer and set its own to null
+        vnode_t *next = current->next;
+        current->next = nullptr;
+        
+        // Add it to the children list
+        this->_add_child(current);
+
+        current = next;
     }
     
-    if (last != child) last->next = child;
+    this->directory_cached = true;
+}
+
+void vnode_t::_uncache_dir(){
+    uint64_t rflags = spin_lock(&this->list_lock);
+
+    // Itterate through the children
+    for (vnode_t *current = this->children; current != nullptr;){
+        if (current->ref_count != 0) {
+            // Something has gone terribly wrong but a
+            // small memory leak is better than a crash
+
+            current = current->next;
+            continue;
+        }
+
+        // Save the next one (_remove_child will not break the order)
+        vnode_t *next = current->next;
+
+        // Remove it from the list
+        this->_remove_child(current, true);
+
+        // Call its cleanup method
+        current->_cleanup();
+
+        // Continue
+        current = next;
+    }
+
+    spin_unlock(&this->list_lock, rflags);
 }
 
 int vnode_t::open(){
-    // Atomically fetch and then increase the reference count
-    uint32_t prev_ref_cnt = __atomic_fetch_add(&this->ref_count, 1, __ATOMIC_SEQ_CST);
+    this->_increase_refcount();
 
-    if (this->file_operations.open) this->file_operations.open(this);
-
-    if (prev_ref_cnt == 0 && this->parent){
-        /*bool found = false;
-
-        // Acquire the lock
-        uint32_t rflags = spin_lock(&this->parent->child_list_lock);
-        
-        for (vnode_t* child = this->parent->children; child != nullptr; child = child->next){
-            if (child == this) {found = true; break;} // already cached
-        }
-        
-
-        // If its not cached, cache it
-        if (!found){
-            vnode_add_to_child_list(this->parent, this);
-        }
-
-        // Release the lock
-        spin_unlock(&this->parent->child_list_lock, rflags);*/
-
-        // Increase the parent's count, so it doesn't get deleted prematurely
-        this->parent->open();
+    if (!this->directory_cached && this->type == VDIR){
+        this->_cache_dir();
     }
-    
+
+    if (this->parent) this->parent->open();
+
     return 0;
 }
 
 int vnode_t::close(){
-    // Atomically subtract and then fetch the reference count
-    int new_ref_count = __atomic_sub_fetch(&this->ref_count, 1, __ATOMIC_SEQ_CST);
+    int count = this->_decrease_refcount();
 
-    if (this->file_operations.close) this->file_operations.close(this);
+    // We will only clean directories. If its refcount reaches 0
+    // It means it and all of its children are closed, so its safe to clean it
+    // We will not remove it from its parent list, as thats the parent's job, for when its
+    // refcount reaches 0
 
-    // If no one is using the file anymore...
-    if (new_ref_count == 0) {
-        
-        // Balance the Parent Reference
-        if (this->parent) {
-            this->parent->close();
+    if (count == 0){
+        if (this->directory_cached) {
+            this->_uncache_dir();
+            this->directory_cached = false;
         }
 
-        if (this->parent == nullptr) {
-            if (this->file_operations.cleanup) this->file_operations.cleanup(this);
-            delete this;
-        }
+        if (this->parent) this->parent->close();
+
+        if (this->file_operations.close) this->file_operations.close(this);
     }
+
     return 0;
 }
 
@@ -138,9 +200,6 @@ vnode_t::~vnode_t(){
 char* vnode_t::read_link(){
     if (this->type != VLNK) return nullptr;
 
-    // It should not be called on a copy (Only call functions for files acquired via find_file).
-    if (this->real_node) return this->real_node->read_link();
-
     if (file_operations.read_link != nullptr){
         return file_operations.read_link(this);
     }
@@ -152,9 +211,6 @@ char* vnode_t::read_link(){
 int vnode_t::read(uint64_t offset, uint64_t length, void* buffer){
     if (this->type == VDIR) return -EISDIR;
 
-    // It should not be called on a copy (Only call functions for files acquired via find_file).
-    if (this->real_node) return this->real_node->read(offset, length, buffer);
-
     if (file_operations.read != nullptr){
         return file_operations.read(offset, length, buffer, this);
     }
@@ -163,9 +219,6 @@ int vnode_t::read(uint64_t offset, uint64_t length, void* buffer){
 
 int vnode_t::write(uint64_t offset, uint64_t length, const void* buffer){
     if (this->type == VDIR) return -EISDIR;
-
-    // It should not be called on a copy (Only call functions for files acquired via find_file).
-    if (this->real_node) return this->real_node->write(offset, length, buffer);
 
     if (file_operations.write != nullptr){
         return file_operations.write(offset, length, buffer, this);
@@ -176,204 +229,109 @@ int vnode_t::write(uint64_t offset, uint64_t length, const void* buffer){
 int vnode_t::truncate(uint64_t size){
     if (!this->file_operations.truncate) return -EOPNOTSUPP;
 
-    // It should not be called on a copy (Only call functions for files acquired via find_file).
-    if (this->real_node) return this->real_node->truncate(size);
-
     return this->file_operations.truncate(size, this);
+}
+
+int vnode_t::mount(vnode_t *detour){
+    this->open(); // Make sure it does not get cleaned prematurely
+
+    // Call the detour's mount before opening it, to give the fs a chance to initialize itself :)
+    if (detour->file_operations.mount) detour->file_operations.mount(detour);
+    detour->open();
+
+    if (this == vfs::get_root_node()){
+        // We need to create corresponding folders (like /dev, /sys)
+        // In the detour and mount them to avoid shadowing them
+
+        dirent_t *entries = nullptr;
+        int count = this->read_dir(&entries);
+
+        for (int i = 0; i < count; i++){
+            if (entries[i].type != VDIR) continue;
+
+            detour->mkdir(entries[i].name);
+
+            vnode_t *point = nullptr;
+            this->find_file(entries[i].name, &point);
+
+            vnode_t *target = nullptr;
+            detour->find_file(entries[i].name, &target);
+
+            if (point && target){
+                target->mount(point);
+            }
+        }
+
+        free(entries);
+    }
+
+    if (this->mount_point) return -EALREADY;
+
+
+    this->mount_point = detour;
+    detour->mounted_on = this;
+
+    return 0;
 }
 
 // @warning It will return an already open vnode!
 int vnode_t::find_file(const char* filename, vnode_t** ret){
-    if (this->type != VDIR) return -ENOTDIR;
+    uint64_t rflags = spin_lock(&this->list_lock);
 
-    // It should not be called on a copy (Only call functions for files acquired via find_file).
-    if (this->real_node) return this->real_node->find_file(filename, ret);
-
-    vnode_t* list = nullptr;
-    
-    int count = this->read_dir(&list);
-
-    if (count == 0) return -ENOENT;
-
-    uint64_t rflags = spin_lock(&child_list_lock);
-
-    bool node_found = false;
-    for (vnode_t* node = list; node != nullptr;){
-        vnode_t* next = node->next;
-        int r = strcmp(node->name, filename);
-        
-        if (r == 0){
-            node_found = true;
-            if (node->real_node){
-                // Open the node to avoid race conditions
-                node->real_node->open();
-                *ret = node->real_node;
-                delete node;
-            } else {
-                *ret = node;
-                node->next = nullptr;
-            }
-            node = next;
-            continue;
-        }
-
-        // read_dir returns a copy of the children, so we can safely delete it
-        delete node;
-        node = next;
-    }
-
-    spin_unlock(&child_list_lock, rflags);
-
-    return node_found ? 0 : -ENOENT;
-}
-
-int vnode_t::read_dir(vnode_t** ret){
-    // Check if its cached
-    // If it is, copy the children into a newly allocated list,
-    // set their real_node parameter and place them in ret
-    // (To avoid any list changes corrupting the list, since the caller
-    //  probably doesn't hold the list lock.)
-
-    // If its not, call the operation read_dir provided by the fs driver.
-    // Loop through the list returned and update / create the missing entries
-    // in the child list
-
-    // Loop again and check for any extra (e.g. deleted files) and remove them from the list
-    // Call close() if their ref_cnt is zero, to free their memory.
-    
-    vnode_t *self = this->real_node ? this->real_node : this;
     *ret = nullptr;
 
-    if (self->type != VDIR) return -ENOTDIR;
+    // Itterate through the children
+    for (vnode_t *current = this->children; current != nullptr; current = current->next){
+        if (strcmp(current->name, filename)) continue;
 
+        current->_increase_refcount(); 
 
-    spinlock_t *child_lock = &self->child_list_lock;
-
-    uint64_t rflags = spin_lock(child_lock);
-
-
-    // If its not cached, and we should cache it, do so.
-    if (!self->directory_cached){
-        // Firstly loop through the current state of the list and remove any files that shouldn't be there
-
-        size_t child_cnt = 0;
-        if (self->file_operations.read_dir) child_cnt = self->file_operations.read_dir(ret, this);
-
-        for (vnode_t *next, *child = self->children; child != nullptr; child = next){
-            next = child->next;
-
-            // If its a virtual file (meaning it does not necessarily exist on the disk), skip it
-            if (child->virtual_file) continue;
-
-            // Otherwise check if it exists in the structure returned
-            
-            bool exists = false;
-            for (vnode_t* a = *ret; a != nullptr; a = a->next){
-                if (strcmp(a->name, child->name) == 0){
-                    exists = true;
-                    break;
-                }
-            }
-
-            if (!exists){
-                vnode_remove_from_child_list(self, child, false);
-                
-                if (child->ref_count == 0) {
-                    child->parent = nullptr;
-                    child->close();
-                }
-            }
-
-        }
-
-        // Now that the list has been cleaned, we can update it
-        for (vnode_t* entry = *ret; entry != nullptr; entry = entry->next){
-            vnode_t *cached_entry = nullptr;
-            for (vnode_t* a = self->children; a != nullptr; a = a->next){
-                if (strcmp(a->name, entry->name) == 0){
-                    cached_entry = a;
-                    break;
-                }
-            }
-
-
-            if (cached_entry){
-                // Update its contents
-                
-                cached_entry->permissions = entry->permissions;
-                cached_entry->uid = entry->uid;
-                cached_entry->gid = entry->gid;
-                cached_entry->last_accessed = entry->last_accessed;
-                cached_entry->last_modified = entry->last_modified;
-                cached_entry->creation_time = entry->creation_time;
-                cached_entry->size = entry->size;
-                cached_entry->partition_total_size = entry->partition_total_size;
-                cached_entry->io_block_size = entry->io_block_size;
-                cached_entry->inode = entry->inode;
-                cached_entry->fs_identifier = entry->fs_identifier;
-                cached_entry->file_identifier = entry->file_identifier;
-            } else {
-                // Create it
-                vnode_t *clone = new vnode_t(entry->type);
-                memcpy(clone, entry, sizeof(vnode_t));
-                clone->parent = self;
-                clone->ref_count = 0;
-
-                vnode_add_to_child_list(self, clone);
-            }
-        }
-
-        // Free the list we aqcuired from the filesystem
-        for (vnode_t *next, *entry = *ret; entry != nullptr; entry = next){
-            next = entry->next;
-            
-            delete entry;
-        }
-
-        *ret = nullptr;
-
-        self->directory_cached = true;
+        *ret = current;
+        break;
     }
 
-    int cnt = 0;
+    spin_unlock(&this->list_lock, rflags);
 
-    if (self->is_mounted){
-        cnt = self->mount_point->read_dir(ret);
+    if (*ret) {
+        (*ret)->open(); 
+        (*ret)->_decrease_refcount(); 
+        return 0;
     }
 
-    
-    // Create a copy of the list
+    return -ENOENT;
+}
 
-    for (vnode_t *child = self->children; child != nullptr; child = child->next){
-        cnt++;
+int vnode_t::read_dir(dirent_t** ret){
+    uint64_t rflags = spin_lock(&this->list_lock);
 
-        vnode_t *clone = new vnode_t(child->type);
-        memcpy(clone, child, sizeof(vnode_t));
-
-        clone->real_node = child;
-        clone->ref_count = 0;
-        clone->next = nullptr;
-
-        if (*ret == nullptr){
-            *ret = clone;
-            continue;
-        }
-
-        vnode_t *last = *ret;
-        while (last->next) last = last->next;
-
-        last->next = clone;
+    int child_count = 0;
+    for (vnode_t *current = this->children; current != nullptr; current = current->next){
+        child_count++;
     }
 
-    spin_unlock(child_lock, rflags);
-    return cnt;
+    spin_unlock(&this->list_lock, rflags);
+
+    rflags = spin_lock(&this->list_lock);
+
+    dirent_t *buffer = (dirent_t *)malloc(sizeof(dirent_t) * child_count);
+
+    int i = 0;
+    for (vnode_t *current = this->children; current != nullptr; current = current->next){
+        strcpy(buffer[i].name, current->name);
+        buffer[i].inode = current->inode;
+        buffer[i].type = current->type;
+
+        i++;
+    }
+
+    spin_unlock(&this->list_lock, rflags);
+
+    *ret = buffer;
+    return child_count;
 }
 
 int vnode_t::mkdir(const char* name){
     if (this->type != VDIR) return -ENOTDIR;
-
-    // It should not be called on a copy (Only call functions for files acquired via find_file).
-    if (this->real_node) return this->real_node->mkdir(name);
 
     vnode_t* node = nullptr;
     int ret = this->find_file(name, &node);
@@ -384,23 +342,27 @@ int vnode_t::mkdir(const char* name){
 
     ret = -EOPNOTSUPP;
 
-    if (this->is_mounted && this->mount_point->file_operations.mkdir){
-        ret = this->mount_point->file_operations.mkdir((char*)name, this->mount_point);
-    } else if (this->file_operations.mkdir){
+    if (this->file_operations.mkdir){
         ret = this->file_operations.mkdir((char*)name, this);
     }
 
-    if (this->directory_cached) this->should_cache_directory = true;
-    this->directory_cached = false;
+    if (this->directory_cached && ret == 0 && this->file_operations.find_file) {
+        vnode_t *newdir = nullptr;
+        int r = this->file_operations.find_file(name, &newdir, this);
+
+        if (newdir){
+            newdir->next = nullptr;
+            newdir->previous = nullptr;
+
+            this->_add_child(newdir);
+        }
+    }
 
     return ret;
 }
 
 int vnode_t::creat(const char* name){
     if (this->type != VDIR) return -ENOTDIR;
-
-    // It should not be called on a copy (Only call functions for files acquired via find_file).
-    if (this->real_node) return this->real_node->creat(name);
 
     vnode_t* node = nullptr;
     int ret = this->find_file(name, &node);
@@ -411,8 +373,17 @@ int vnode_t::creat(const char* name){
         ret = this->file_operations.creat((char*)name, this);
     }
 
-    if (this->directory_cached) this->should_cache_directory = true;
-    this->directory_cached = false;
+    if (this->directory_cached && ret == 0 && this->file_operations.find_file) {
+        vnode_t *newfile = nullptr;
+        int r = this->file_operations.find_file(name, &newfile, this);
+
+        if (newfile){
+            newfile->next = nullptr;
+            newfile->previous = nullptr;
+
+            this->_add_child(newfile);
+        }
+    }
 
     return ret;
 }
@@ -426,20 +397,13 @@ void vnode_t::save_metadata(){
 int vnode_t::rmdir(){
     if (this->type != VDIR) return -ENOTDIR;
     
-    // It should not be called on a copy (Only call functions for files acquired via find_file).
-    if (this->real_node) return this->real_node->rmdir();
-
     if (this->file_operations.rmdir){
         int ret = this->file_operations.rmdir(this);
         if (ret == 0){
-            if (this->parent) vnode_remove_from_child_list(this->parent, this);
+            if (this->parent) this->parent->_remove_child(this);
             this->parent = nullptr;
         }
 
-        if (this->parent && this->parent->directory_cached) {
-            this->should_cache_directory = true;
-            this->parent->directory_cached = false;
-        }
         return ret;
     }
     
@@ -448,21 +412,13 @@ int vnode_t::rmdir(){
 }
 
 int vnode_t::unlink(){
-    // It should not be called on a copy (Only call functions for files acquired via find_file).
-    if (this->real_node) return this->real_node->unlink();
-
-    if (this->type == VDIR) return rmdir();
+    if (this->type == VDIR) return -EISDIR;
 
     if (this->file_operations.unlink){
         int ret = this->file_operations.unlink(this);
         if (ret == 0){
-            if (this->parent) vnode_remove_from_child_list(this->parent, this);
+            if (this->parent) this->parent->_remove_child(this);
             this->parent = nullptr;
-        }
-
-        if (this->parent && this->parent->directory_cached) {
-            this->should_cache_directory = true;
-            this->parent->directory_cached = false;
         }
         return ret;
     }
@@ -491,6 +447,15 @@ int null_write(uint64_t offset, uint64_t length, const void* buffer, vnode_t* th
     return length;
 }
 
+void create_null(){
+    vnode_t *null = vfs::create_path("/dev/null", VCHR);
+    null->file_operations.read = null_read;
+    null->file_operations.write = null_write;
+    null->permissions = 0666;
+    
+    null->close();
+}
+
 namespace vfs{
     vnode_t* root_node = nullptr;
 
@@ -500,53 +465,16 @@ namespace vfs{
 
     void initialize_vfs(){
         root_node = filesystems::memfs::create_memfs();
+        root_node->open(); // Make sure its not freed... ever...
 
         strcpy(root_node->name, "/");
-        root_node->virtual_file = true;
 
-        // Create the /dev subdirectory
-        vnode_t* dev_dir = filesystems::memfs::create_memfs();
-        strcpy(dev_dir->name, "dev");
-        dev_dir->virtual_file = true;
-        dev_dir->type = VDIR;
+        root_node->mkdir("dev");
+        root_node->mkdir("proc");
+        root_node->mkdir("sys");
 
-        vfs::add_node(vfs::get_root_node(), dev_dir);
-
-        vnode_t *null = new vnode_t(VCHR);
-        strcpy(null->name, "null");
-        null->file_operations.read = null_read;
-        null->file_operations.write = null_write;
-        vfs::add_node(dev_dir, null);
-        null->permissions = 0777;
-
-
-
-
-        // Create /proc and /proc/bus
-        vnode_t* root = vfs::get_root_node();
-        root->mkdir("proc");
-        
-        vnode_t* proc = vfs::resolve_path("/proc");
-
-        if (proc){
-            proc->mkdir("bus");
-            proc->close();
-
-            proc->mkdir("sys");
-
-            /* Add a dynamic link for the /proc/self directory */
-            vnode_t *link = new vnode_t(VLNK);
-            link->file_operations.read_link = procfs_read_link;
-            strcpy(link->name, "self");
-            add_node(proc, link);
-        }
-
-        vnode_t* sys = vfs::resolve_path("/proc/sys");
-        if (sys){
-            sys->mkdir("kernel");
-            sys->close();
-        }
-
+        create_null();
+        /*
         vnode_t* kernel = vfs::resolve_path("/proc/sys/kernel");
 
         if (kernel){
@@ -559,53 +487,8 @@ namespace vfs{
         if (os_release){
             os_release->write(0, strlen(KERNEL_VERSION_STRING), KERNEL_VERSION_STRING);
             os_release->close();
-        }
+        }*/
 
-    }
-
-    // @brief Will mount a fs node into node
-    int mount(vnode_t* node, vnode_t* mount_target){
-        if (mount_target->is_mounted) return -EEXIST;
-
-        // Prepare to mount
-        if (node->file_operations.mount != nullptr)
-            node->file_operations.mount(node);
-
-        node->open();
-        // Mount
-        mount_target->mount_point = node;
-        mount_target->is_mounted = true;
-        mount_target->virtual_file = true;
-        
-        node->is_mount_point = true;
-        node->mounted_on = mount_target;
-
-        return 0;
-    }
-
-    // @brief Will add a virtual inode to the parent (Exists only in memory)
-    int add_node(vnode_t* parent, vnode_t* node){
-        vnode_t* ret;
-
-        int r = parent->find_file(node->name, &ret);
-        if (r != -ENOENT) {
-            node->close();
-            return -EEXIST;
-        }
-
-        node->parent = parent;
-        node->virtual_file = true;
-        uint64_t rflags = spin_lock(&parent->child_list_lock);
-        vnode_add_to_child_list(parent, node);
-        spin_unlock(&parent->child_list_lock, rflags);
-        node->open();
-        return 0;
-    }
-
-    // @brief Will remove a node. Warning, make sure its ref_cnt is 0!
-    int rm_node(vnode_t* parent, vnode_t* node){
-        vnode_remove_from_child_list(parent, node);
-        return 0;
     }
 
     // @brief Returns -EACC
@@ -642,7 +525,7 @@ namespace vfs{
         char* path_copy = strdup(path); 
         if (!path_copy) return nullptr;
 
-        vnode_t* start_node = root_node;
+        vnode_t* start_node = root_node->mount_point ? root_node->mount_point : root_node;
         start_node->open();
         // Start the recursive walk
         vnode_t* result = _resolve_path_recursion(start_node, path_copy, 0, follow_links, follow_trailing);
@@ -697,10 +580,11 @@ namespace vfs{
             }
 
             if (current->find_file(token, &next) != 0) {
+                current->close();
                 return nullptr; // -ENOENT (Not found)
             }
 
-            if (next->is_mounted && next->mount_point) {
+            if (next->mount_point) {
                 vnode_t* real_root = next->mount_point;
                 real_root->open();
                 next->close();
@@ -719,10 +603,7 @@ namespace vfs{
                     
                     vnode_t* link_base;
                     if (link_path[0] == '/') {
-                        link_base = root_node;
-
-                        // Since we are jumping to root, we can release the directory we were in
-                        current->close(); 
+                        link_base = root_node->mount_point ? root_node->mount_point : root_node;
                     } else {
                         link_base = current; 
                     }
@@ -733,11 +614,15 @@ namespace vfs{
                     
                     free(link_path);
 
-                    if (!resolved_target) return nullptr; // Broken link
+                    if (!resolved_target) {
+                        current->close();
+                        return nullptr; // Broken link
+                    }
 
                     // The resolved target becomes our 'next'
                     next = resolved_target;
                 } else {
+                    if (next) next->close();
                     current->close();
                     return nullptr;
                 }
@@ -776,8 +661,9 @@ namespace vfs{
         else if (node->type == VLNK) kprintf(" (LNK)");
         
         // Check if it's a mountpoint
-        if (node->is_mounted) kprintf(" [MOUNT] (Usage: %d / %d)",
-            node->mount_point->size / (1024 * 1024), node->mount_point->partition_total_size / (1024 * 1024));
+        if (node->mount_point) node = node->mount_point; 
+        if (node->mounted_on) kprintf(" [MOUNT] (Usage: %d / %d)",
+            node->size / (1024 * 1024), node->partition_total_size / (1024 * 1024));
         
         kprintf("\n");
 
@@ -785,25 +671,26 @@ namespace vfs{
         bool self_reference = memcmp(".", node->name, 2) == 0;
         bool parent_reference = memcmp("..", node->name, 3) == 0;
         if (node->type == VDIR && !self_reference && !parent_reference) {
-            vnode_t* children_list = nullptr;
+            dirent_t* children_list = nullptr;
             
-            // This creates a NEW linked list of node copies on the heap
             int count = node->read_dir(&children_list);
 
-            vnode_t* iterator = children_list;
-            while (iterator != nullptr) {
+            dirent_t* iterator = children_list;
+            for (int i = 0; i < count; i++) {
                 // Save next pointer because we might delete iterator
-                vnode_t* next_node = iterator->next;
+                vnode_t* child_node = nullptr;
+                node->find_file(iterator->name, &child_node);
 
                 // Recurse down
-                print_tree(iterator, depth + 1, max_depth);
+                if (child_node) {
+                    print_tree(child_node, depth + 1, max_depth);
+                    child_node->close();
+                }
 
-                // CLEANUP: read_dir gave us a heap-allocated copy.
-                // We must delete it now that we are done with it.
-                delete iterator;
-
-                iterator = next_node;
+                iterator++;
             }
+
+            free(children_list);
         }
     }
 
@@ -837,6 +724,86 @@ namespace vfs{
         recursive_path_builder(node, buffer, offset);
 
         return buffer;
+    }
+
+
+    // @warning Please ensure that the root fs of this path is a memfs if you want to create virtual files!
+    vnode_t* create_path(const char* absolute_path, vnode_type_t type) {
+        if (!absolute_path || absolute_path[0] != '/') return nullptr;
+
+        char* path_copy = strdup(absolute_path);
+        if (!path_copy) return nullptr;
+
+        vnode_t* current = vfs::get_root_node();
+        
+        // Sanity check 1: Make sure the VFS is actually initialized!
+        if (!current) { 
+            free(path_copy);
+            return nullptr;
+        }
+        current->open();
+
+        char* state;
+        char* token = strtok_r(path_copy, "/", &state);
+
+        while (token != nullptr) {
+            char* next_token = strtok_r(nullptr, "/", &state);
+            bool is_last = (next_token == nullptr);
+
+            vnode_t* next_node = nullptr;
+            int r = current->find_file(token, &next_node);
+
+            if (r == -ENOENT) {
+                if (!is_last || type == VDIR) {
+                    int res = current->mkdir(token);
+                    if (res != 0 && res != -EEXIST) {
+                        current->close();
+                        free(path_copy);
+                        return nullptr;
+                    }
+                    current->find_file(token, &next_node);
+                } else {
+                    int res = current->creat(token);
+                    if (res != 0 && res != -EEXIST) {
+                        current->close();
+                        free(path_copy);
+                        return nullptr;
+                    }
+                    current->find_file(token, &next_node);
+
+                    if (next_node && next_node->type != type) {
+                        next_node->type = type;
+                    }
+                }
+            } else if (r == 0) {
+                // The node exists! 
+                if (!is_last && next_node->type != VDIR) {
+                    next_node->close();
+                    current->close();
+                    free(path_copy);
+                    return nullptr;
+                }
+            } else {
+                current->close();
+                free(path_copy);
+                return nullptr;
+            }
+
+            if (!next_node) {
+                current->close();
+                free(path_copy);
+                return nullptr;
+            }
+
+            current->close();
+            current = next_node;
+            token = next_token;
+        }
+
+        free(path_copy);
+        
+        // Return the final node! (It is already open with ref_count = 1 because of find_file)
+        return current; 
     }
 
 }

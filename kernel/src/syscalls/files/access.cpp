@@ -10,8 +10,6 @@ long sys_access(const char *ustring, int mode){
     fix_path(ustring, path, sizeof(path), self);
 
     vnode_t* node = vfs::resolve_path(path);
-
-
     if (node == nullptr){
         return -ENOENT;
     }

@@ -13,6 +13,7 @@ long sys_read(int fd, char* user_buffer, size_t count){
     fd_t* ofd = self->get_fd(fd);
     if (ofd == nullptr) return -EBADF;
     if (ofd->node->type == VDIR) return -EISDIR;
+
     /*if ((ofd->flags & O_WRONLY) == O_WRONLY)
         return -EACCES;*/
 

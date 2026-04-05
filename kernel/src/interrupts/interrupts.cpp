@@ -24,7 +24,7 @@ extern "C" void spurious_interrupt_handler_cpp(void*){
 extern "C" void apic_timer_handler_cpp(__registers_t* regs){
     uint64_t old_cr3 = 0;
     asm volatile ("mov %%cr3, %0" : "=r" (old_cr3));
-    asm volatile ("mov %0, %%cr3" :: "r" (virtual_to_physical((uint64_t)globalPTM.PML4)));
+    asm volatile ("mov %0, %%cr3" :: "r" (global_ptm_cr3));
 
     cpu_local_data* local = get_cpu_local_data();
     local->lapic->tick_count++;
@@ -42,7 +42,7 @@ extern "C" void apic_timer_handler_cpp(__registers_t* regs){
 extern "C" void task_scheduler_swap_task_cpp(__registers_t* regs){
     uint64_t old_cr3 = 0;
     asm volatile ("mov %%cr3, %0" : "=r" (old_cr3));
-    asm volatile ("mov %0, %%cr3" :: "r" (virtual_to_physical((uint64_t)globalPTM.PML4)));
+    asm volatile ("mov %0, %%cr3" :: "r" (global_ptm_cr3));
     
     task_scheduler::scheduler_tick(regs, true);
     asm volatile ("mov %0, %%cr3" :: "r" (old_cr3));

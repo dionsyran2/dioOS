@@ -8,6 +8,7 @@
 #include <local.h>
 #include <syscalls/files/fcntl.h>
 #include <drivers/timers/common.h>
+#include <signum.h>
 
 #define UTILIZATION_UPDATE_FREQUENCY 1000 // Every 1000 ticks (ms)
 
@@ -28,36 +29,21 @@ fd_t* task_t::get_fd(int num, bool lock){
 }
 
 fd_t* task_t::open_node(vnode_t* node, int num){
+    /* Create the file entry in /proc */
+    char buff[128];
+    stringf(buff, sizeof(buff), "/proc/%d/fd/%d", this->pid, num);
 
-    if (this->proc_vfs_dir){
-        char buff[25];
-        stringf(buff, 25, "%d", num);
+    vnode_t *file = vfs::create_path(buff, VLNK);
 
-        vnode_t* fd_dir = nullptr;
-        this->proc_vfs_dir->find_file("fd", &fd_dir);
+    if (file){
+        char* str = vfs::get_full_path_name(node);
+        file->write(0, strlen(str), str);
 
-        if (!fd_dir){
-            this->proc_vfs_dir->mkdir("fd");
-            this->proc_vfs_dir->find_file("fd", &fd_dir);
-        }
-
-        if (fd_dir){
-            fd_dir->creat(buff);
-
-            vnode_t* file = nullptr;
-            fd_dir->find_file(buff, &file);
-
-            if (file){
-                char* str = vfs::get_full_path_name(node);
-                file->write(0, strlen(str), str);
-
-                free(str);
-                file->close();
-            }
-            fd_dir->close();
-        }
+        free(str);
+        file->close();
     }
 
+    // Open the actual file descriptor
     uint64_t rflags = spin_lock(&file_descriptor_lock);
 
     while(1){
@@ -90,27 +76,16 @@ fd_t* task_t::open_node(vnode_t* node, int num){
 }
 
 void task_t::close_fd(int num){
-    if (this->proc_vfs_dir){
-        fd_t* fd = get_fd(num);
-        if (fd){
-            char buff[25];
-            stringf(buff, 25, "%d", fd->num);
+    fd_t *fd_check = this->get_fd(num);
+    if (!fd_check) return;
 
-            vnode_t* fd_dir = nullptr;
-            this->proc_vfs_dir->find_file("fd", &fd_dir);
+    char buff[128];
+    stringf(buff, sizeof(buff), "/proc/%d/fd/%d", this->pid, num);
 
-            if (fd_dir){
-                vnode_t* file = nullptr;
-                this->proc_vfs_dir->find_file(buff, &file);
-
-                if (file){
-                    file->unlink();
-                    file->close();
-                }
-
-                fd_dir->close();
-            }
-        }
+    vnode_t *entry = vfs::resolve_path(buff, false, false);
+    if (entry){
+        entry->unlink();
+        entry->close();
     }
 
     uint64_t rflags = spin_lock(&file_descriptor_lock);
@@ -166,6 +141,10 @@ void task_t::Block(task_block_type_t type, uint64_t context){
     task_scheduler::_swap_tasks();
 }
 
+void task_t::Unblock(){
+    this->task_state = PAUSED;
+}
+
 
 /* @brief Sets the task state for specified ms, then reverts back. Used mainly for blocking */
 /* @param ms: The time (in milliseconds, -1 means indefinetly. Use it only for blocking when waiting on IO) */
@@ -186,7 +165,7 @@ void task_t::ScheduleFor(int64_t ms, task_state_t state, task_block_type_t block
 
 
 // @brief Read from process memory
-bool task_t::read_memory(void* address, void* buffer, size_t length){
+bool task_t::read_memory(const void* address, void* buffer, size_t length){
     size_t bytes_copied = 0;
     PageTableManager* PTM = this->ptm ? this->ptm : &globalPTM;
 
@@ -214,7 +193,7 @@ bool task_t::read_memory(void* address, void* buffer, size_t length){
     return true;
 }
 
-// @brief Write to process memory
+// @brief Write to process memory safely, respecting Copy-On-Write
 bool task_t::write_memory(void* address, const void* buffer, size_t length){
     size_t bytes_copied = 0;
     PageTableManager* PTM = this->ptm ? this->ptm : &globalPTM;
@@ -222,13 +201,52 @@ bool task_t::write_memory(void* address, const void* buffer, size_t length){
     while (bytes_copied < length) {
         uint64_t user_va = (uint64_t)address + bytes_copied;
         uint64_t page_offset = user_va & 0xFFF;
+        uint64_t pg = user_va & ~0xFFFUL; // Base page address
         
         size_t chunk_size = 0x1000 - page_offset;
         size_t remaining = length - bytes_copied;
         if (chunk_size > remaining) chunk_size = remaining;
 
+
+        uint64_t flags = this->vm_tracker->get_flags(pg);
+        if (flags && flags & VM_PENDING_COW) {
+            uint64_t old_physical = PTM->getPhysicalAddress((void*)pg);
+            if (old_physical) {
+                // Allocate a new page for the split
+                void* new_page = GlobalAllocator.RequestPage();
+                if (!new_page) {
+                    kprintf("\nWRITE_MEMORY FAULT (new_page == NULL)\n");
+                    return false;
+                }
+
+                // Copy the data via the kernel's high-memory mapping
+                memcpy(new_page, (void*)physical_to_virtual(old_physical), PAGE_SIZE);
+
+                // Remove old reference from the shared page
+                GlobalAllocator.DecreaseReferenceCount((void*)old_physical);
+
+                // Map the new private page into this task's page tables
+                uint64_t new_physical = virtual_to_physical((uint64_t)new_page);
+                PTM->MapMemory((void*)pg, (void*)new_physical);
+
+                // Restore all standard permissions
+                if (flags & VM_FLAG_RW) PTM->SetFlag((void*)pg, PT_Flag::Write, true);
+                if (flags & VM_FLAG_NX) PTM->SetFlag((void*)pg, PT_Flag::NX, true);
+                if (flags & VM_FLAG_CD) PTM->SetFlag((void*)pg, PT_Flag::CacheDisable, true);
+                if (flags & VM_FLAG_WT) PTM->SetFlag((void*)pg, PT_Flag::WriteThrough, true);
+                PTM->SetFlag((void*)pg, PT_Flag::User, true);
+
+                // Clear the CoW flag so we don't split it again
+                this->vm_tracker->set_flags(pg, PAGE_SIZE, flags & ~VM_PENDING_COW);
+            }
+        }
+
         uint64_t phys = PTM->getPhysicalAddress((void*)user_va);
-        if (phys == 0) return false;
+        if (phys == 0) {
+            kprintf("\nWRITE_MEMORY FAULT (phys == 0) (%p)\n", user_va);
+            return false;
+        }
+        
         if (!PTM->GetFlag((void*)(user_va & (~0xFFFUL)), PT_Flag::User)) {
             kprintf("\nACCESS FAULT\n");
             return false;
@@ -286,9 +304,33 @@ finished:
     return kernel_buffer;
 }
 
+#include <syscalls/linux/futex.h>
 #include <drivers/serial/serial.h>
+
+long futex_wake(uint32_t *uaddr, int futex_op, uint32_t val);
+
 void task_t::exit(int status, bool silent){
     asm ("cli");
+
+    if (!silent){
+        if (this->clear_child_tid){
+            uint32_t buffer = 0;
+
+            this->write_memory(this->clear_child_tid, &buffer, sizeof(uint32_t));
+
+            futex_wake((uint32_t*)this->ptm->getPhysicalAddress(this->clear_child_tid), FUTEX_WAKE, UINT32_MAX);
+        }
+        
+        /*if (this->signal_parent_on_exit){
+            task_t *parent = task_scheduler::get_process(this->ppid);
+
+            if (parent){
+                parent->kernel_signals |= (1 << (SIGCHLD - 1));
+                parent->pending_signals |= (1 << (SIGCHLD - 1));
+            }
+        }*/
+    }
+    
 
     cpu_local_data *local = get_cpu_local_data();
     asm ("mov %0, %%rsp" :: "r" (local->scheduler_stack));
@@ -302,24 +344,22 @@ void task_t::exit(int status, bool silent){
     this->status_code = (status << 8);
 
     this->task_state = ZOMBIE;
-    if (!this->vm_mirror) {
-        // You don't want to know how much i was chasing this fucking leak
-        GlobalAllocator.FreePages((void*)(this->syscall_stack_top - TASK_STACK_SIZE), DIV_ROUND_UP(TASK_STACK_SIZE, PAGE_SIZE));
-        GlobalAllocator.FreePages((void*)(this->kernel_stack_top - TASK_STACK_SIZE), DIV_ROUND_UP(TASK_STACK_SIZE, PAGE_SIZE));
-        
-        if (this->userspace){
-            // Let the vm_tracker handle it
-            this->vm_tracker.change_flags(this->user_stack_top - TASK_STACK_SIZE, TASK_STACK_SIZE, VM_FLAG_RW | VM_FLAG_US);
-            // If this->userspace is false, this->user_stack_top is the same as this->kernel_stack_top!
-        }
-        
-        // Clear any memory allocated by the task (does not include the stacks)
-        this->vm_tracker.exit(this->ptm, true);
+
+    // -----
+    GlobalAllocator.FreePages((void*)(this->syscall_stack_top - TASK_STACK_SIZE), DIV_ROUND_UP(TASK_STACK_SIZE, PAGE_SIZE));
+    GlobalAllocator.FreePages((void*)(this->kernel_stack_top - TASK_STACK_SIZE), DIV_ROUND_UP(TASK_STACK_SIZE, PAGE_SIZE));
+    
+    if (this->userspace){
+        this->vm_tracker->set_flags(this->user_stack_top - TASK_STACK_SIZE, TASK_STACK_SIZE, VM_FLAG_RW | VM_FLAG_US);
     }
+    
+    // Clear any memory allocated by the task (does not include the kernel stacks)
+    this->vm_tracker->free(this->ptm);
 
     // Clear the fpu save
     uint64_t required_pages = DIV_ROUND_UP(g_fpu_storage_size, PAGE_SIZE);
     GlobalAllocator.FreePages(this->saved_fpu_state, required_pages);
+    
     
     if (!silent) {
         task_scheduler::_wake_waiting_tasks(this->pid);
@@ -347,7 +387,6 @@ namespace task_scheduler
     task_t* task_list;
 
     uint64_t current_pid = 10000;
-    uint64_t current_tgid = 1;
 
     void mark_ready(task_t* task){
         task->is_ready = true;
@@ -358,11 +397,29 @@ namespace task_scheduler
         while(1) __asm__ ("hlt");
     }
 
-    task_t* get_process(tid_t pid){
+    task_t* get_process(pid_t pid){
+        uint64_t rflags = spin_lock(&task_list_lock);
         for (task_t* current = task_list; current != nullptr; current = current->next){
-            if (current->pid == pid) return current;
+            if (current->pid == pid) {
+                spin_unlock(&task_list_lock, rflags);
+                return current;
+            }
         }
 
+        spin_unlock(&task_list_lock, rflags);
+        return nullptr;
+    }
+
+    task_t *get_thread(tid_t tgid, pid_t pid){
+        uint64_t rflags = spin_lock(&task_list_lock);
+        for (task_t* current = task_list; current != nullptr; current = current->next){
+            if (current->pid == pid && current->tgid == tgid) {
+                spin_unlock(&task_list_lock, rflags);
+                return current;
+            }
+        }
+        
+        spin_unlock(&task_list_lock, rflags);
         return nullptr;
     }
 
@@ -387,6 +444,7 @@ namespace task_scheduler
 
     // @brief Triggers an interrupt to swap tasks
     void _swap_tasks(){
+        asm ("sti");
         asm ("int %0" : : "i" (SCHEDULER_SWAP_TASKS_VECTOR));
     }
     
@@ -452,12 +510,24 @@ namespace task_scheduler
     }
 
     void exit_process(task_t* thread, int status){
+        // Lock the list to prevent concurrent modifications
+        uint64_t rflags = spin_lock(&task_list_lock);
+
         for (task_t* c = task_list; c != nullptr; c = c->next){
             if (c->pgid == thread->pgid && c != thread && c->task_state != ZOMBIE){
-                c->exit(status);
+                
+                c->kernel_signals |= (1 << (SIGKILL - 1));
+                c->pending_signals |= (1 << (SIGKILL - 1));
+
+                if (c->task_state == BLOCKED) {
+                    c->task_state = PAUSED;
+                }
             }
         }
 
+        spin_unlock(&task_list_lock, rflags);
+
+        // Now it is perfectly safe for THIS thread to kill itself
         thread->exit(status);
     }
 
@@ -469,13 +539,15 @@ namespace task_scheduler
 
         
         uint64_t ret = 0;
-        for (uint64_t o = 0; o < TASK_STACK_SIZE; o += 0x1000){
+        for (uint64_t o = 0; o < TASK_STACK_SIZE; o += PAGE_SIZE){
             uint64_t allocation = (uint64_t)GlobalAllocator.RequestPage();
+            memset((void*)allocation, 0, PAGE_SIZE);
+
             uint64_t physical = virtual_to_physical(allocation);
 
             task->ptm->MapMemory((void*)(base + o), (void*)physical);
             task->ptm->SetFlag((void*)(base + o), PT_Flag::User, true);
-            task->vm_tracker.mark_allocation(base + o, PAGE_SIZE, VM_FLAG_COW | VM_FLAG_RW | VM_FLAG_US | VM_FLAG_DONT_FREE);
+            task->vm_tracker->mark_allocation(base + o, PAGE_SIZE, VM_FLAG_COW | VM_FLAG_RW | VM_FLAG_US);
 
             ret = base + o;
         }
@@ -495,8 +567,6 @@ namespace task_scheduler
         *fcw = 0x037F;
 
         // Set the MXCSR (SSE Control/Status) at offset 24 (0x18)
-        // Default value: 0x1F80 (Mask all SIMD exceptions)
-        // CRITICAL: If this is 0, the first SSE instruction might crash!
         uint32_t* mxcsr = (uint32_t*)((uint8_t*)task->saved_fpu_state + 24);
         *mxcsr = 0x1F80;
 
@@ -509,17 +579,19 @@ namespace task_scheduler
         task_t* task = new task_t;
         memset(task, 0, sizeof(task_t));
 
-        task->vm_tracker.lock = 0;
-        task->vm_tracker.vm_list = nullptr;
-        task->vm_tracker.total_marked_memory = 0;
+        task->vm_tracker = new vm_tracker_t;
         task->start_time = GetTicks();
 
         PageTableManager* ptm = &globalPTM;
 
         if (create_ptm){
-            ptm = new PageTableManager((PageTable*)GlobalAllocator.RequestPage(), &task->vm_tracker);
-            task->vm_tracker.mark_allocation((uint64_t)ptm->PML4, PAGE_SIZE, VM_FLAG_RW | VM_FLAG_DO_NOT_SHARE);
+            ptm = new PageTableManager((PageTable*)GlobalAllocator.RequestPage(), task->vm_tracker);
+
+            task->vm_tracker->mark_allocation((uint64_t)ptm->PML4, PAGE_SIZE, VM_FLAG_RW | VM_FLAG_DO_NOT_SHARE);
+            serialf("task: %s\n", name);
+
             memset(ptm->PML4, 0, PAGE_SIZE);
+
             ClonePTM(ptm, &globalPTM);
         }
 
@@ -536,25 +608,26 @@ namespace task_scheduler
         task->counter = TASK_SCHED_DEFAULT_COUNT;
 
         task->kernel_stack_top = (uint64_t)GlobalAllocator.RequestPages(DIV_ROUND_UP(TASK_STACK_SIZE, PAGE_SIZE)) + TASK_STACK_SIZE;
-        if (userspace) {
+        if (userspace && create_ptm) {
             task->user_stack_top = _allocate_stack(task, 0x800000000000);
         } else {
             task->user_stack_top = task->kernel_stack_top;
         }
         task->syscall_stack_top = (uint64_t)GlobalAllocator.RequestPages(DIV_ROUND_UP(TASK_STACK_SIZE, PAGE_SIZE)) + TASK_STACK_SIZE;
+        for (int i = 0; i < TASK_STACK_SIZE; i += 0x1000){
+            task->ptm->SetFlag((void*)(task->syscall_stack_top - i), PT_Flag::User, true);
+        }
 
         task->affinity = UINT64_MAX; // Enable all cores
 
         if (!init){
-            task->pid = __atomic_fetch_add(&current_pid, 1, __ATOMIC_SEQ_CST);
-            task->tgid = __atomic_fetch_add(&current_tgid, 1, __ATOMIC_SEQ_CST);
+            task->tgid = task->pid = __atomic_fetch_add(&current_pid, 1, __ATOMIC_SEQ_CST);
             task->pgid = task->pid;
         } else {
             task->pid = task->tgid = task->pgid = 1;
         }
 
         vnode_t *root = vfs::resolve_path("/");
-        root->open();
         task->cwd = task->open_node(root, 0x99);
 
         _init_task_fpu(task);
@@ -569,18 +642,18 @@ namespace task_scheduler
         task_t* task = _create_task_structure(name, entry, userspace, ptm, init);
 
         if (userspace){
-            vnode_t* proc = vfs::resolve_path("/proc");
-            
-            if (proc){
-                proc->mkdir(toString((uint64_t)task->pid));
-                char full_path[256];
-                stringf(full_path, sizeof(full_path), "/proc/%d", task->pid);
-                task->proc_vfs_dir = vfs::resolve_path(full_path);
+
+            char full_path[256];
+            stringf(full_path, sizeof(full_path), "/proc/%d", task->pid);
+
+            task->proc_vfs_dir = vfs::create_path(full_path, VDIR);
+            if (task->proc_vfs_dir){
                 task->proc_vfs_dir->uid = task->ruid;
                 task->proc_vfs_dir->gid = task->rgid;
-
-                _add_dynamic_task_virtual_files(task);
+                task->proc_vfs_dir->close();
             }
+
+            _add_dynamic_task_virtual_files(task);
         }
 
         return task;
@@ -592,17 +665,19 @@ namespace task_scheduler
         memcpy(task->saved_fpu_state, process->saved_fpu_state, g_fpu_storage_size);
 
         if (!share_vm){
-            task->ptm = new PageTableManager((PageTable*)GlobalAllocator.RequestPage(), &task->vm_tracker);
+            task->ptm = new PageTableManager((PageTable*)GlobalAllocator.RequestPage(), task->vm_tracker);
             memset(task->ptm->PML4, 0, PAGE_SIZE);
             ClonePTM(task->ptm, process->ptm);
+
+            task->vm_tracker->brk_offset = process->vm_tracker->brk_offset;
+            task->vm_tracker->rmap_offset = process->vm_tracker->rmap_offset;
         } else {
             task->ptm = process->ptm;
-            task->vm_mirror = true;
+            delete task->vm_tracker;
+
+            task->vm_tracker = process->vm_tracker;
+            task->vm_tracker->share_vm();
         }
-
-        task->brk_offset = process->brk_offset;
-        task->rmap_offset = process->rmap_offset;
-
 
         /* Copy the FDs */
         /*if (share_files){
@@ -644,6 +719,9 @@ namespace task_scheduler
         task->registers.rsp = process->syscall_registers->rsp;
         task->registers.rip = process->syscall_registers->rcx;
         task->registers.rax = 0;
+        
+        task->registers.rflags = process->syscall_registers->r11;
+
 
         task->fs_pointer = process->fs_pointer;
 
@@ -661,13 +739,12 @@ namespace task_scheduler
         task_t* task = new task_t;
         memset(task, 0, sizeof(task_t));
 
-        task->vm_tracker.lock = 0;
-        task->vm_tracker.vm_list = nullptr;
-        task->vm_tracker.total_marked_memory = 0;
+        task->vm_tracker = new vm_tracker_t();
         task->start_time = GetTicks();
         
-        PageTableManager* ptm = new PageTableManager((PageTable*)GlobalAllocator.RequestPage(), &task->vm_tracker);
-        task->vm_tracker.mark_allocation((uint64_t)ptm->PML4, PAGE_SIZE, VM_FLAG_RW | VM_FLAG_DO_NOT_SHARE);
+        PageTableManager* ptm = new PageTableManager((PageTable*)GlobalAllocator.RequestPage(), task->vm_tracker);
+        task->vm_tracker->mark_allocation((uint64_t)ptm->PML4, PAGE_SIZE, VM_FLAG_RW | VM_FLAG_DO_NOT_SHARE);
+        
         memset(ptm->PML4, 0, PAGE_SIZE);
         ClonePTM(ptm, &globalPTM);
 
@@ -679,6 +756,8 @@ namespace task_scheduler
         task->is_krnl = victim->is_krnl;
         task->is_ready = false;
 
+        task->signal_parent_on_exit = victim->signal_parent_on_exit;
+
         task->counter = TASK_SCHED_DEFAULT_COUNT;
 
         task->kernel_stack_top = (uint64_t)GlobalAllocator.RequestPages(DIV_ROUND_UP(TASK_STACK_SIZE, PAGE_SIZE)) + TASK_STACK_SIZE;
@@ -688,6 +767,9 @@ namespace task_scheduler
             task->user_stack_top = task->kernel_stack_top;
         }
         task->syscall_stack_top = (uint64_t)GlobalAllocator.RequestPages(DIV_ROUND_UP(TASK_STACK_SIZE, PAGE_SIZE)) + TASK_STACK_SIZE;
+        for (int i = 0; i < TASK_STACK_SIZE; i += 0x1000){
+            task->ptm->SetFlag((void*)(task->syscall_stack_top - i), PT_Flag::User, true);
+        }
 
         task->affinity = UINT64_MAX; // Enable all cores
 
@@ -709,22 +791,20 @@ namespace task_scheduler
             victim->proc_vfs_dir = nullptr;
         }
 
-        vnode_t* proc = vfs::resolve_path("/proc");
-        
-        if (proc){
-            proc->mkdir(toString((uint64_t)task->pid));
-            char full_path[256];
-            stringf(full_path, sizeof(full_path), "/proc/%d", task->pid);
-            task->proc_vfs_dir = vfs::resolve_path(full_path);
-            _add_dynamic_task_virtual_files(task);
+        char full_path[256];
+        stringf(full_path, sizeof(full_path), "/proc/%d", task->pid);
 
+        task->proc_vfs_dir = vfs::create_path(full_path, VDIR);
+        if (task->proc_vfs_dir){
             task->proc_vfs_dir->uid = task->ruid;
             task->proc_vfs_dir->gid = task->rgid;
+            task->proc_vfs_dir->close();
         }
+        _add_dynamic_task_virtual_files(task);
 
         for (fd_t* fd = victim->file_descriptors; fd != nullptr; fd = fd->next){
             if (fd->flags & O_CLOEXEC) continue;
-
+            fd->node->open();
             task->open_node(fd->node, fd->num);
         }
 
@@ -739,7 +819,6 @@ namespace task_scheduler
 
         if (set_cwd_to_root){
             vnode_t *root = vfs::resolve_path("/");
-            root->open();
 
             task->cwd = task->open_node(root, 0x99);
         }
@@ -751,10 +830,111 @@ namespace task_scheduler
 
         return task;
     }
+
+    void _handle_signals(task_t *task){
+        if (!task->pending_signals) return;
+    
+        kernel_sigset_t signal_set = task->pending_signals;
+
+        for (int i = 0; i < 64; i++){
+            if ((signal_set & (1UL << i)) == 0 || (task->signal_mask & (1UL << i))) continue;
+
+            // Signal is set.
+
+            // Default
+            serialf("Signal : %d %d\n", i + 1, task->signal_actions[i].sa_handler);
+
+            int signal = i + 1;
+            if (task->signal_actions[i].sa_handler == SIG_DFL){
+                if (signal == SIGHUP || signal == SIGINT || signal == SIGKILL || signal == SIGTERM || 
+                    signal == SIGABRT || signal == SIGSEGV || signal == SIGILL || signal == SIGFPE || 
+                    signal == SIGBUS || signal == SIGQUIT) {
+                    serialf("Task %d terminated by fatal signal %d\n", task->pid, signal);
+
+                    task->exit(signal);
+                    _swap_tasks();
+                }
+            } else if (task->signal_actions[i].sa_handler == SIG_IGN){
+                // Ignore
+            } else if (task->signal_actions[i].sa_handler == SIG_ERR /* What does this mean? */){
+                // ???
+            } else {
+                // Run the handler
+                bool siginfo = (task->signal_actions[i].sa_flags & SA_SIGINFO) != 0;
+
+                __registers_t saved_regs;
+
+                // Store the previous register values
+                memcpy(&saved_regs, &task->registers, sizeof(__registers_t));
+
+                // Jump over the red zone
+                task->registers.rsp -= 128;
+
+                if (siginfo){
+                    siginfo_t info;
+                    memset(&info, 0, sizeof(info));
+
+                    info.si_signo = i + 1; 
+                    info.si_code = (task->kernel_signals & (1UL << i)) ? SI_KERNEL : SI_USER;
+                    
+                    task->registers.rsp -= sizeof(info);
+                    task->write_memory((void*)task->registers.rsp, &info, sizeof(info));
+                    
+                    task->registers.rsi = task->registers.rsp; // Arg 2: siginfo pointer
+                    task->registers.rdx = 0x1234DEAD;          // Arg 3: ucontext pointer (TODO)
+                }
+
+                // Create space for the registers
+                task->registers.rsp -= (sizeof(__registers_t) + g_fpu_storage_size);
+                
+                // Align the stack to 16 bytes
+                task->registers.rsp &= ~0xF; 
+
+                // Save the registers
+                task->write_memory((void *)task->registers.rsp, &saved_regs, sizeof(__registers_t));
+                task->write_memory((void *)(task->registers.rsp + sizeof(__registers_t)), task->saved_fpu_state, g_fpu_storage_size);
+
+                // Push the restorer
+                task->registers.rsp -= sizeof(uint64_t);
+                task->write_memory((void*)task->registers.rsp, &task->signal_actions[i].sa_restorer, sizeof(uint64_t));
+
+                task->registers.rdi = i + 1; // Arg 1: Signal number
+                task->registers.rip = (uint64_t)task->signal_actions[i].sa_handler;
+                
+                task->registers.CS = (0x18 | 0x3);
+                task->registers.SS = (0x20 | 0x3);
+
+                // Swap to the userspace tables
+                task->registers.cr3 = virtual_to_physical((uint64_t)task->ptm->PML4);
+
+                task->signal_count++;
+
+                signal_set &= ~(1UL << i);
+                task->kernel_signals &= ~(1UL << i);
+
+                // Mask the signal
+                if ((task->signal_actions[i].sa_flags & SA_NODEFER) == 0) {
+                    task->signal_mask |= (1UL << i);
+                }
+
+                if (task->task_state == BLOCKED) task->woke_by_signal = true;
+                break;
+            }
+
+            signal_set &= ~(1UL << i);
+            task->kernel_signals &= ~(1UL << i);
+            if (signal_set == 0) break;
+
+        }
+
+        task->pending_signals = signal_set;
+    }
     
     void _run_task(task_t* task, cpu_local_data* local){
         local->current_task = task;
         set_tss_rsp0(task->kernel_stack_top); // :)
+        
+        if (!task->executing_syscall) _handle_signals(task);
 
         // Run the task
         if (!task->has_run){
@@ -763,7 +943,7 @@ namespace task_scheduler
             // Set the rsp
             if (task->registers.rsp == 0) task->registers.rsp = task->user_stack_top;
 
-            task->registers.rflags = 0x202; // Interrupts Enable
+            if (!task->registers.rflags) task->registers.rflags = 0x202; // Interrupts Enable
             task->has_run = true;
 
             // Set CS/SS
@@ -788,6 +968,7 @@ namespace task_scheduler
 
     bool _should_unblock(task_t* task){
         if (task->task_state != BLOCKED) return false;
+        if (task->pending_signals) return true;
 
         if (task->block_type == MEMORY_NON_ZERO){
             uint8_t buffer = 0;
@@ -833,7 +1014,9 @@ namespace task_scheduler
             }
 
             // Check if it should be unblocked
-            if (current->task_state == BLOCKED && _should_unblock(current)) current->task_state = PAUSED;
+            if (current->task_state == BLOCKED && _should_unblock(current)) {
+                current->task_state = PAUSED;
+            }
 
             current->counter = TASK_SCHED_DEFAULT_COUNT;
         } 
@@ -868,6 +1051,8 @@ namespace task_scheduler
     void _execute_next_task(__registers_t* regs, cpu_local_data* local /* Avoid refetching it */){
         // Ensure interrupts are disabled... This is a critical stage
         asm ("cli");
+        asm ("mov %0, %%rsp" :: "r" (local->scheduler_stack));
+
         
         // Acquire a lock for the task list
         uint64_t flags = spin_lock(&task_list_lock);

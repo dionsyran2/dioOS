@@ -94,7 +94,6 @@ namespace gpt{
 
             if (is_esp && is_boot){
                 // Its the ESP partition, mount as /boot (If we can detect a valid filesystem)
-                //kprintf("ESP: %s\n", node->name);
 
                 vnode_t* root = create_root_node_fs(node);
                 if (root == nullptr) continue;
@@ -103,19 +102,21 @@ namespace gpt{
                 vnode_t* boot = vfs::resolve_path("/boot");
                 // If it does not exist create it
                 if (!boot){
-                    boot = new vnode_t(VDIR);
-                    strcpy(boot->name, "boot");
-                    vfs::add_node(vfs::get_root_node(), boot);
+                    boot = vfs::create_path("/boot", VDIR); // same as root->mkdir()
                 }
 
                 // Mount it
-                vfs::mount(root, boot);
+                if (boot) {
+                    boot->mount(root);
+                    boot->close();
+                }
 
             } else if (is_boot && !mounted_root){
                 vnode_t* root_fs = create_root_node_fs(node);
                 if (!root_fs) continue;
 
-                vfs::mount(root_fs, vfs::get_root_node());
+                vnode_t *root = vfs::get_root_node();
+                root->mount(root_fs);
                 // root node created, mount it
                 mounted_root = true;
             }
@@ -238,24 +239,20 @@ vnode_ops_t partition_operations = {
 };
 
 vnode_t* create_node_for_partition(partition_t* pent, int partition_id, bool p_prefix){
-    vnode_t* node = new vnode_t(VBLK);
+    char pathname[128];
+    stringf(pathname, sizeof(pathname), "/dev/%s%s%d", pent->node->name, p_prefix ? "p" : "", partition_id);
 
-    node->fs_identifier = (uint64_t)pent;
-    node->io_block_size = pent->node->io_block_size;
-    node->size = node->io_block_size * (pent->ending_lba - pent->starting_lba);
-    memcpy(&node->file_operations, &partition_operations, sizeof(vnode_ops_t));
+    vnode_t* node = vfs::create_path(pathname, VBLK);
 
-    stringf(node->name, sizeof(node->name), "%s%s%d", pent->node->name, p_prefix ? "p" : "", partition_id);
-
-    vnode_t* dev_dir = vfs::resolve_path("/dev");
-    if (dev_dir == nullptr){
-        kprintf("[Partitions] Could not resolve path '/dev'\n");
-    }else{
-        vfs::add_node(dev_dir, node);
-        return node;
+    if (node){
+        node->fs_identifier = (uint64_t)pent;
+        node->io_block_size = pent->node->io_block_size;
+        node->size = node->io_block_size * (pent->ending_lba - pent->starting_lba);
+        memcpy(&node->file_operations, &partition_operations, sizeof(vnode_ops_t));
     }
-    
-    return nullptr;
+
+
+    return node;
 }
 
 

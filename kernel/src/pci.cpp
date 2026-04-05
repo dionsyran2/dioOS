@@ -141,7 +141,7 @@ namespace pci{
             enumerate_bus(alloc[i].Address, 0);
         }
 
-        create_pci_vfs_entries();
+        //create_pci_vfs_entries();
     }
 
     void create_pci_vfs_entries(){

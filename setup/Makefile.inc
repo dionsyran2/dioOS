@@ -73,8 +73,8 @@ setup:
 		cp $(SETUPDIR)/fonts $(DISKDIR)/fonts -r; \
 	fi
 
-	# cd $(SETUPDIR); \
-	# kconfig mconf dioOS_config
+	cd $(SETUPDIR); \
+	kconfig mconf dioOS_config
 
 	cp $(SETUPDIR)/inittab $(DISKDIR)/etc/
 
@@ -91,29 +91,29 @@ setup:
 	STRIP="$(TOOLCHAIN_DIR)/bin/$(TARGET_ARCH)-strip" \
 	LDFLAGS="-L$(DISKDIR)/lib/x86_64-dioOS-gnu -L$(DISKDIR)/lib -L$(DISKDIR)/usr/lib -Wl,-rpath-link=$(DISKDIR)/lib/x86_64-dioOS-gnu"
 
-	# $(MAKE) build_limine
+	$(MAKE) build_limine
 
-	# $(MAKE) build_glibc
+	$(MAKE) build_glibc
     
-	# $(MAKE) build_ncurses
+	$(MAKE) build_ncurses
 	
-	# $(MAKE) build_libcap
+	$(MAKE) build_libcap
 	
-	# $(MAKE) build_busybox
+	$(MAKE) build_busybox
 	
-	# $(MAKE) build_htop
+	$(MAKE) build_htop
 	
-	# $(MAKE) build_utils
+	$(MAKE) build_utils
 
-	# $(MAKE) build_bash
+	$(MAKE) build_bash
 	
-	# $(MAKE) build_x11
+	$(MAKE) build_x11
 
 	$(MAKE) build_xorg
 
-	# @if [ ! -f $(DISKDIR)/etc/passwd ]; then \
-	# 	python3 $(SETUPDIR)/user_creator.py; \
-	# fi
+	@if [ ! -f $(DISKDIR)/etc/passwd ]; then \
+	 	python3 $(SETUPDIR)/user_creator.py; \
+	fi
 
 	rm -rf $(TMPDIR)
 

@@ -3,216 +3,195 @@
 #include <paging/PageFrameAllocator.h>
 #include <paging/PageTableManager.h>
 
-void vm_tracker_t::add_to_list(vm_struct* vm){
-    if (vm_list == nullptr || vm->address < vm_list->address) {
-        vm->next = vm_list;
-        vm_list = vm;
-        return;
-    }
-
-    vm_struct* v = vm_list;
-    while (v->next != nullptr && v->next->address < vm->address) {
-        v = v->next;
-    }
-    
-    vm->next = v->next;
-    v->next = vm;
-}
-
-void vm_tracker_t::remove_from_list(vm_struct* target){
-    vm_struct* prev = nullptr;
-
-    for (vm_struct* vm = vm_list; vm != nullptr; vm = vm->next){
-        if (vm == target){
-            if (prev == nullptr) {
-                vm_list = vm->next;
-            }else{
-                prev->next = vm->next;
-            }
-            break;
-        }
-        
-        prev = vm;
-    }
-}
 
 
-void vm_tracker_t::mark_allocation(uint64_t virtual_address, uint32_t size, uint32_t flags){
-    total_marked_memory += size;
+vm_struct* vm_tracker_t::get_page(uint64_t virtual_address) {
+    vm_struct* vm = this->tree->floor_search(virtual_address);
 
-
-    for (vm_struct* vm = vm_list; vm != nullptr; vm = vm->next){
-        bool at_end = (vm->address + vm->size) == virtual_address;
-        bool at_start = (virtual_address + size) == vm->address;
-        bool extends = (at_end || at_start) && vm->flags == flags;
-
-        if (!extends) continue;
-
-        if (at_start){
-            vm->address = virtual_address;
-            vm->size += size;
-        } else {
-            vm->size += size;
-
-            if (vm->next && vm->next->address == (vm->address + vm->size) && vm->next->flags == flags) {
-                vm_struct* victim = vm->next;
-                vm->size += victim->size;
-                vm->next = victim->next;
-                delete victim;
-            }
-        }
-        return;
-    }
-
-    vm_struct* vm = new vm_struct;
-    vm->address = virtual_address;
-    vm->size = size;
-    vm->flags = flags;
-    vm->next = nullptr;
-
-    add_to_list(vm);
-}
-
-vm_struct* vm_tracker_t::_handle_trimming(vm_struct* target, uint64_t start, uint64_t end){
-    uint64_t vma_start = target->address;
-    uint64_t vma_end = vma_start + target->size;
-    // Partial overlap / Split cases!
-    // Check if it leaves a prefix, a suffix, or both
-    
-    // Leaves a prefix
-    if (start > vma_start) {
-        target->size = start - vma_start;
-
-        if (end >= vma_end) {
-            return target->next; 
-        }
-    }
-
-    // Leaves a suffix
-    if (end < vma_end) {
-        if (start <= vma_start) {
-            target->address = end;
-            target->size = vma_end - end;
-        } else {
-            vm_struct* suffix = new vm_struct;
-
-            suffix->address = end;
-            suffix->size = vma_end - end;
-            suffix->flags = target->flags;
-
-            suffix->next = target->next;
-            target->next = suffix;
-            return suffix->next;
-        }
-    }
-    
-    return target->next;
-}
-
-void vm_tracker_t::remove_allocation(uint64_t virtual_address, uint32_t size){
-    uint64_t start = virtual_address;
-    uint64_t end = start + size;
-
-    for (vm_struct* vm = vm_list; vm != nullptr;){
-        uint64_t vma_start = vm->address;
-        uint64_t vma_end = vma_start + vm->size;
-
-        bool full_overlap = (vma_start >= start && vma_end <= end);
-        bool overlaps = !(end <= vma_start || start >= vma_end);
-        bool trim = overlaps && !(vma_start >= start && vma_end <= end);
-        
-        if (full_overlap){
-            vm_struct* next = vm->next;
-
-            remove_from_list(vm);
-            delete vm;
-
-            vm = next;
-            continue;
-        }else if (trim){
-            vm = _handle_trimming(vm, start, end);
-            continue;
-        }
-
-        vm = vm->next;
-    }
-
-    total_marked_memory -= size;
-}
-void vm_tracker_t::change_flags(uint64_t start, uint32_t size, uint32_t new_flags) {
-    uint64_t end = start + size;
-
-    for (vm_struct* vm = vm_list; vm != nullptr;){
-        uint64_t vma_start = vm->address;
-        uint64_t vma_end = vma_start + vm->size;
-
-        bool full_overlap = (vma_start >= start && vma_end <= end);
-        bool overlaps = !(end <= vma_start || start >= vma_end);
-        bool trim = overlaps && !full_overlap;
-
-        if (full_overlap){
-            vm_struct* next = vm->next;
-            remove_from_list(vm);
-            delete vm;
-            vm = next;
-            continue;
-        } else if (trim){
-            vm = _handle_trimming(vm, start, end);
-            continue;
-        }
-
-        vm = vm->next;
-    }
-
-    mark_allocation(start, size, new_flags);
-}
-
-uint8_t vm_tracker_t::get_flags(uint64_t virtual_address){
-    for (vm_struct* vm = vm_list; vm != nullptr; vm = vm->next){
-        if (virtual_address >= vm->address && virtual_address < (vm->address + vm->size))
-            return vm->flags;
-    }
-
-    return 0;
-}
-
-#include <kstdio.h>
-vm_struct* vm_tracker_t::get_page(uint64_t virtual_address){
-    for (vm_struct* vm = vm_list; vm != nullptr; vm = vm->next){        
-        if (virtual_address >= vm->address && virtual_address < (vm->address + vm->size)){
+    if (vm != nullptr) {
+        if (virtual_address >= vm->start && virtual_address < (vm->start + vm->size)) {
             return vm;
         }
     }
     return nullptr;
 }
 
-void vm_tracker_t::exit(void* ptmv, bool force){
-    PageTableManager* ptm = (PageTableManager*)ptmv;
-    if (!ptm) return;
-    for (vm_struct* vm = vm_list; vm != nullptr;){
-        if (!force && vm->flags & VM_FLAG_DONT_FREE){
-            vm = vm->next;
-            continue;
-        }
-        
-        for (int i = 0; i < vm->size; i += 0x1000){
-            GlobalAllocator.DecreaseReferenceCount((void*)ptm->getPhysicalAddress((void*)(vm->address + i)));
-        }
-
-        vm_struct* nvm = vm->next;
-
-        remove_from_list(vm);
-        
-        delete vm;
-        vm = nvm;
+vm_struct* vm_tracker_t::split_vma(vm_struct* vm, uint64_t split_addr) {
+    // If the address is outside or exactly on the boundary, no split is needed
+    if (split_addr <= vm->start || split_addr >= (vm->start + vm->size)) {
+        return nullptr; 
     }
-    
-    vm_list = nullptr;
+
+    // Create the new right-hand chunk
+    vm_struct* new_vm = new vm_struct;
+    new_vm->start = split_addr;
+    new_vm->size = (vm->start + vm->size) - split_addr;
+    new_vm->flags = vm->flags;
+
+    // Shrink the original left-hand chunk
+    vm->size = split_addr - vm->start;
+
+    // Insert the new right-hand chunk into the tree
+    this->tree->insert(new_vm->start, new_vm);
+
+    return new_vm;
 }
 
-void copy_vmm(vm_tracker_t* dest, vm_tracker_t* src){
-    for (vm_struct* vm = src->vm_list; vm != nullptr; vm = vm->next){
-        if (vm->flags & VM_FLAG_DO_NOT_SHARE) continue;
-        dest->mark_allocation(vm->address, vm->size, vm->flags);
+void vm_tracker_t::mark_allocation(uint64_t virtual_address, uint32_t size, uint32_t flags){
+    vm_struct *vm = new vm_struct;
+    vm->start = virtual_address;
+    vm->size = size;
+    vm->flags = flags;
+
+    this->total_marked_memory += size;
+    
+    this->tree->insert(virtual_address, vm);
+}
+
+void vm_tracker_t::remove_allocation(uint64_t virtual_address, uint32_t size){
+    uint64_t end_addr = virtual_address + size;
+    uint64_t current_addr = virtual_address;
+
+    while (current_addr < end_addr) {
+        vm_struct* vm = get_page(current_addr);
+        
+        if (!vm) {
+            current_addr += 0x1000; // Skip unmapped holes
+            continue; 
+        }
+
+        if (current_addr > vm->start) {
+            vm = split_vma(vm, current_addr);
+        }
+
+        if (end_addr < (vm->start + vm->size)) {
+            split_vma(vm, end_addr);
+        }
+
+        // The chunk is now perfectly aligned with our removal request
+        uint64_t next_addr = vm->start + vm->size;
+        
+        this->tree->remove(vm->start);
+        delete vm;
+
+        current_addr = next_addr;
     }
+
+    this->total_marked_memory -= size;
+}
+
+// @brief Modifies flags, automatically splitting chunks if they partially overlap
+void vm_tracker_t::set_flags(uint64_t virtual_address, uint32_t size, uint32_t new_flags) {
+    uint64_t end_addr = virtual_address + size;
+    uint64_t current_addr = virtual_address;
+
+    while (current_addr < end_addr) {
+        vm_struct* vm = get_page(current_addr);
+        
+        if (!vm) {
+            current_addr += 0x1000; // Skip unmapped memory
+            continue;
+        }
+
+        if (current_addr > vm->start) {
+            vm = split_vma(vm, current_addr);
+        }
+
+        if (end_addr < (vm->start + vm->size)) {
+            split_vma(vm, end_addr);
+        }
+
+        vm->flags = new_flags;
+
+        current_addr += vm->size;
+    }
+}
+
+uint8_t vm_tracker_t::get_flags(uint64_t virtual_address){
+    vm_struct *vm = this->get_page(virtual_address);
+
+    return vm ? vm->flags : 0;
+}
+
+void vm_tracker_t::free(PageTableManager* ptm){
+    int new_ref = __atomic_sub_fetch(&this->reference_count, 1, __ATOMIC_SEQ_CST);
+
+    if (new_ref > 0) return;
+
+    kstd::linked_list_t<uint64_t> *entries = this->tree->range_search(0, UINT64_MAX);
+    
+    while (entries->size() > 0) {
+        uint64_t virtual_address = entries->get(0);
+        entries->remove(0);
+        vm_struct *vm = this->tree->search(virtual_address);
+        
+        if (!vm) continue;
+
+        uint64_t flags = vm->flags;
+        uint64_t size = vm->size;
+        delete vm;
+        this->tree->remove(virtual_address);
+
+        if (flags & VM_FLAG_DONT_FREE) continue;
+        
+        for (uint64_t offset = 0; offset < size; offset += 0x1000) {
+            uint64_t physical = ptm->getPhysicalAddress((void*)(virtual_address + offset));
+            if (physical){
+                GlobalAllocator.DecreaseReferenceCount((void*)physical);
+            }
+        }
+    }
+
+    delete entries;
+}
+
+void vm_tracker_t::share_vm(){
+    __atomic_add_fetch(&this->reference_count, 1, __ATOMIC_SEQ_CST);
+}
+
+void vm_tracker_t::copy_as_cow(PageTableManager* src, vm_tracker_t* child_tracker, PageTableManager* child_table){
+    kstd::linked_list_t<uint64_t> *entries = this->tree->range_search(0, UINT64_MAX);
+    
+    while (entries->size() > 0) {
+        uint64_t virtual_address = entries->get(0);
+        entries->remove(0); // Pop the head off in O(1) time
+        
+        vm_struct *vm = this->get_page(virtual_address);
+        if (!vm) continue;
+
+        uint64_t flags = vm->flags;
+        uint64_t size = vm->size;
+
+        if (flags & VM_FLAG_DO_NOT_SHARE) continue;
+
+        for (uint64_t offset = 0; offset < size; offset += 0x1000){
+            uint64_t page = virtual_address + offset;
+            uint64_t physical = src->getPhysicalAddress((void*)page);
+            if (physical == 0) continue;
+            
+            if (flags & VM_FLAG_COW){
+                flags |= VM_PENDING_COW;
+                src->SetFlag((void*)page, PT_Flag::Write, false);
+            }
+
+            uint64_t raw = src->getMapping((void*)page);
+            child_table->SetMapping((void*)page, raw);
+
+            if (src->GetFlag((void*)page, User)){
+                child_table->SetFlag((void*)page, User, true);
+            }
+            
+            GlobalAllocator.IncreaseReferenceCount((void*)physical);
+        }
+        
+        vm->flags = flags;
+        child_tracker->mark_allocation(virtual_address, size, flags);
+    }
+
+    delete entries;
+}
+
+vm_tracker_t::vm_tracker_t(){
+    this->tree = new kstd::avl_tree_t<vm_struct*>;
+    this->reference_count = 1;
 }
