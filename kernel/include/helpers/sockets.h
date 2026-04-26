@@ -1,5 +1,7 @@
 #pragma once
 #include <filesystem/vfs/vfs.h>
+#include <syscalls/sockets.h>
 #include <scheduling/spinlock/spinlock.h>
 
-int connect_socket_to_pipes(vnode_t *socket, vnode_t *inbound_pipe, vnode_t *outbound_pipe);
+
+int connect_socket_structs(unix_socket_t *s1, unix_socket_t *s2, socket_transfer *t1, socket_transfer* t2);

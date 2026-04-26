@@ -51,13 +51,16 @@ struct virtual_terminal{
     uint16_t cursor_x;
     uint16_t cursor_y;
 
+    bool cursor_state;
+    bool insert_mode;
+    
     uint16_t cursor_saved_cell_x;
     uint16_t cursor_saved_cell_y;
     vt_cell cursor_prev_cell_state;
 
     uint16_t saved_offset[2];
 
-    bool disable_cursor;
+    bool disable_cursor, disable_tty;
 
     bool caps_lock, num_lock, scroll_lock, ctrl_held, shift_held;
     
@@ -77,6 +80,8 @@ struct virtual_terminal{
     drivers::GraphicsDriver* driver;
 
     vnode_t* node;
+
+    int foreground_pgrp;
 
     volatile termios settings;
 
@@ -109,6 +114,8 @@ struct virtual_terminal{
     void mark_dirty(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
     void reset_dirty();
     void update_screen();
+
+    void draw_cursor(bool clear = false);
 };
 
 

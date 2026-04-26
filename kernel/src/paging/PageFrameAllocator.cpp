@@ -27,7 +27,7 @@ bool PageFrameAllocator::Initialize(limine_memmap_response* memmap){
         if (entry->base + entry->length > highest_address) highest_address = entry->base + entry->length;
     }
 
-    free_memory = 0;   // Changed: We will calculate this as we unlock pages
+    free_memory = 0;
     reserved_memory = 0;
     used_memory = 0;
     
@@ -51,15 +51,12 @@ bool PageFrameAllocator::Initialize(limine_memmap_response* memmap){
     // Clear the memory
     memset(page_table, 0, memory_needed);
 
-    // OPTIMIZATION: Default everything to LOCKED without using Spinlocks
-    // Directly manipulating the array is 100x faster than calling LockPage for each page
     for (uint64_t i = 0; i < total_pages; i++){
         page_table[i].flags |= PAGE_FLAGS_LOCKED;
     }
-    //    Initially, everything is reserved
+
     reserved_memory = total_memory; // Roughly
 
-    // OPTIMIZATION: Unlock usable memory without using Spinlocks
     size_t blob_size = (size_t)(trampoline_blob_end - trampoline_blob_start);
     
     for (uint64_t i = 0; i < memmap->entry_count; i++){
@@ -72,7 +69,6 @@ bool PageFrameAllocator::Initialize(limine_memmap_response* memmap){
             ap_trampoline_region_size = entry->length;
         }
 
-        // Direct unlock loop
         uint64_t start_frame = entry->base / 0x1000;
         uint64_t page_count = entry->length / 0x1000;
 

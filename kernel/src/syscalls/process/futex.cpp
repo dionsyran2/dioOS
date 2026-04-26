@@ -74,13 +74,20 @@ long futex_wait(uint32_t *uaddr, int futex_op, uint32_t val, const timespec *tim
     if (entry->waiters) entry->waiters->previous = waiter; // Safety check
     entry->waiters = waiter;
 
+    asm ("cli");
+
+    self->previous_state = self->task_state;
+    self->task_state = BLOCKED;
+    self->block_type = WAITING_ON_FUTEX;
+    self->block_context = 0;
+
     spin_unlock(&entry->lock, rflags);
 
     int ret = 0;
 
     // Block
     if (timeout){
-        serialf("[FUTEX] TIMED WAIT key: %p, val: %d\n", key, val);
+        //serialf("[FUTEX] TIMED WAIT key: %p, val: %d\n", key, val);
         timespec time;
         if (!self->read_memory(timeout, &time, sizeof(timespec))){
             rflags = spin_lock(&entry->lock);
@@ -95,16 +102,20 @@ long futex_wait(uint32_t *uaddr, int futex_op, uint32_t val, const timespec *tim
         }
 
         uint64_t start_time = GetTicks();
-        uint64_t ms_timeout = (time.tv_sec * 1000) + (time.tv_nsec / 1000);
+        uint64_t ms_timeout = (time.tv_sec * 1000) + (time.tv_nsec / 1000000);
         // Timed
-        self->ScheduleFor(ms_timeout, BLOCKED, WAITING_ON_FUTEX);
 
+        uint64_t final_ticks = local_apic_list->tick_count + (ms_timeout * local_apic_list->ticks_per_ms);
+        self->schedule_until = final_ticks;
+
+        task_scheduler::_swap_tasks();
+        
         if (start_time + ms_timeout <= GetTicks())
             ret = -ETIMEDOUT;
     } else {
         // Indefinite
-        serialf("[FUTEX] WAIT key: %p, val: %d\n", key, val);
-        self->Block(WAITING_ON_FUTEX, 0);
+        //serialf("[FUTEX] WAIT key: %p, val: %d\n", key, val);
+        task_scheduler::_swap_tasks();
     }
 
     if (self->signal_count == 0 && self->woke_by_signal){
@@ -132,7 +143,9 @@ long futex_wake(uint32_t *uaddr, int futex_op, uint32_t val){
     // Get the futex entry
     futex_t *entry = get_futex(key, false);
 
-    if (!entry) return 0;
+    //serialf("[FUTEX] WAKE key: %p, val: %d\n", key, val);
+
+    if (!entry) {serialf("NO ENTRY\n"); return 0;}
 
     uint64_t rflags = spin_lock(&entry->lock);
 
@@ -145,6 +158,8 @@ long futex_wake(uint32_t *uaddr, int futex_op, uint32_t val){
     }
 
     spin_unlock(&entry->lock, rflags);
+
+    //serialf("WOKEN: %d\n", woken);
     return woken;
 }
 

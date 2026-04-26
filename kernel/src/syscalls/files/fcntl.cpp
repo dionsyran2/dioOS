@@ -32,53 +32,38 @@ uint64_t sys_fcntl(int fd, uint64_t op, uint64_t arg){
     switch(op){
         case F_DUPFD_CLOEXEC:{
             int r = sys_dup(fd);
-            fd_t* fd = self->get_fd(r);
-            fd->flags |= O_CLOEXEC;
+            fd_t* new_fd = self->get_fd(r);
+            new_fd->flags |= O_CLOEXEC;
+            return r;
         }
         case F_DUPFD:
             return sys_dup(fd);
+            
         case F_SETFD:
-            ofd->flags = arg;
+            // F_SETFD takes 1 (FD_CLOEXEC) or 0. We must NOT overwrite O_NONBLOCK!
+            if (arg & 1) {
+                ofd->flags |= O_CLOEXEC;
+            } else {
+                ofd->flags &= ~O_CLOEXEC;
+            }
             break;
+            
         case F_GETFD:
-            return ofd->flags;
+            // Return 1 if FD_CLOEXEC is active, 0 otherwise
+            return (ofd->flags & O_CLOEXEC) ? 1 : 0;
+            
         case F_SETFL:
-            ofd->flags = arg;
+            // F_SETFL updates O_NONBLOCK, O_APPEND, etc. We must preserve O_CLOEXEC!
+            ofd->flags = (arg & ~O_CLOEXEC) | (ofd->flags & O_CLOEXEC);
             break;
+            
         case F_GETFL:
-            return ofd->flags;
-        /*case F_SETOWN_EX:{
-            f_owner_ex* st = (f_owner_ex*)arg;
-            ofd->own = st->pid;
-            ofd->own_type = st->type;
-            break;
-        }
-        case F_GETOWN_EX:{
-            f_owner_ex* st = (f_owner_ex*)arg;
-            st->pid = ofd->own;
-            st->type = ofd->own_type;
-            break;
-        }*/
+            return ofd->flags & ~O_CLOEXEC;
 
         case F_SETLKW:
         case F_SETLK: {
             return 0;
         }
-
-        /*case F_SETLKW: {
-            while (ofd->node->lock != 0 && ofd->node->lock != self->pid) 
-                task_scheduler::schedule_until(GetTicks() + 20, DISABLED);
-
-            flock* lock = (flock*)arg;
-
-            if (lock->l_type == F_RDLCK || lock->l_type == F_WRLCK){
-                ofd->node->lock = self->pid;
-            }else if (lock->l_type == F_UNLCK){
-                ofd->node->lock = 0;
-            }
-            
-            return 0;
-        }*/
         default:
             return -ENOSYS;
     }

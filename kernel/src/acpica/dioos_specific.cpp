@@ -245,7 +245,7 @@ UINT64 AcpiOsGetTimer(){
     
     // It needs in 100 nanosecond units
     UINT64 ns = ms * 10;
-    ns += (TSC::get_ticks() * TSC::get_ticks_per_ns()) / 100; // 100 nanosecond accuracy!
+    ns += TSC::get_time_ns();
 
     return ns;
 }

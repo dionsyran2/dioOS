@@ -199,6 +199,7 @@ int memfs_mkdir(char* name, vnode_t* this_node){
     file_info->to_be_removed = false;
 
     node->file_identifier = (uint64_t)file_info;
+    node->do_not_cache = true;
 
     strcpy(node->name, name);
     memcpy(&node->file_operations, &memfs_ops, sizeof(node->file_operations));
@@ -235,6 +236,7 @@ int memfs_creat(char* name, vnode_t* this_node){
     file_info->to_be_removed = false;
 
     node->file_identifier = (uint64_t)file_info;
+    node->do_not_cache = true;
 
     strcpy(node->name, name);
     memcpy(&node->file_operations, &memfs_ops, sizeof(node->file_operations));
@@ -256,6 +258,7 @@ namespace filesystems{
             file_info->to_be_removed = false;
 
             node->file_identifier = (uint64_t)file_info;
+            node->do_not_cache = true;
 
             memcpy(&node->file_operations, &memfs_ops, sizeof(node->file_operations));
             return node;
@@ -279,7 +282,7 @@ namespace filesystems{
             file_info->to_be_removed = false;
 
             node->file_identifier = (uint64_t)file_info;
-
+            node->do_not_cache = true;
             memcpy(&node->file_operations, &memfs_ops, sizeof(node->file_operations));
 
             return node;

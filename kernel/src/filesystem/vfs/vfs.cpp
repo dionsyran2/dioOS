@@ -7,10 +7,19 @@
 #include <filesystem/fat32/fat32.h>
 #include <filesystem/ext2/ext2.h>
 #include <filesystem/memfs/memfs.h>
+#include <structures/trees/avl_tree.h>
+#include <pty/pty.h>
 #include <CONFIG.h>
 
 #define MAX_SYMLINK_DEPTH 8
 #define PATH_SEPARATOR "/"
+
+namespace filesystems{
+    int current_dev_id = 0;
+    int acquire_dev_id(){
+        return __atomic_fetch_add(&current_dev_id, 1, __ATOMIC_SEQ_CST);
+    }
+}
 
 void vnode_t::_add_child(vnode_t *child){
     uint64_t rflags = spin_lock(&this->list_lock);
@@ -134,6 +143,22 @@ void vnode_t::_uncache_dir(){
     spin_unlock(&this->list_lock, rflags);
 }
 
+bool vnode_t::pollin(){
+    if (this->file_operations.pollin){
+        return this->file_operations.pollin(this);
+    }
+
+    return this->ready_to_receive_data;
+}
+
+bool vnode_t::pollout(){
+    if (this->file_operations.pollout){
+        return this->file_operations.pollout(this);
+    }
+
+    return this->data_ready_to_read;
+}
+
 int vnode_t::open(){
     this->_increase_refcount();
 
@@ -181,7 +206,7 @@ vnode_t::vnode_t(){
     memset(this, 0, sizeof(vnode_t));
     ready_to_receive_data = true;
     data_ready_to_read = true;
-    permissions = 0755;
+    permissions = 0766;
 }
 
 vnode_t::vnode_t(vnode_type_t type){
@@ -190,7 +215,7 @@ vnode_t::vnode_t(vnode_type_t type){
     this->type = type;
     ready_to_receive_data = true;
     data_ready_to_read = true;
-    permissions = 0755;
+    permissions = 0766;
 }
 
 vnode_t::~vnode_t(){
@@ -212,7 +237,7 @@ int vnode_t::read(uint64_t offset, uint64_t length, void* buffer){
     if (this->type == VDIR) return -EISDIR;
 
     if (file_operations.read != nullptr){
-        return file_operations.read(offset, length, buffer, this);
+        return vfs::cache_read(offset, length, buffer, this);//file_operations.read(offset, length, buffer, this);
     }
     return 0;
 }
@@ -221,7 +246,7 @@ int vnode_t::write(uint64_t offset, uint64_t length, const void* buffer){
     if (this->type == VDIR) return -EISDIR;
 
     if (file_operations.write != nullptr){
-        return file_operations.write(offset, length, buffer, this);
+        return vfs::cache_write(offset, length, buffer, this); //file_operations.write(offset, length, buffer, this);
     }
     return 0;
 }
@@ -472,8 +497,9 @@ namespace vfs{
         root_node->mkdir("dev");
         root_node->mkdir("proc");
         root_node->mkdir("sys");
-
+        root_node->mkdir("tmp");
         create_null();
+        initialize_pty_multiplexer();
         /*
         vnode_t* kernel = vfs::resolve_path("/proc/sys/kernel");
 

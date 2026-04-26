@@ -9,6 +9,7 @@
 #include <interrupts/interrupts.h>
 #include <drivers/timers/common.h>
 #include <scheduling/multiprocessor/ap_init.h>
+#include <pty/pty.h>
 #include <acpica/embedded_controller.h>
 #include <filesystem/vfs/vfs.h>
 #include <pci.h>
@@ -102,6 +103,24 @@ void init_modules(){
     }
 }
 
+char* dev_tty_read_link(vnode_t* this_node){
+    task_t *self = task_scheduler::get_current_task();
+
+    char *path = nullptr;
+
+    if (self && self->ctty){
+        path = vfs::get_full_path_name(self->ctty);
+    } else {
+        char *str = "/dev/tty0";
+        
+        path = (char *)malloc(strlen(str) + 1);
+        strcpy(path, str);
+    }
+
+    return path;
+}
+
+
 void init_display(){
     if (framebuffer_request.response == nullptr || framebuffer_request.response->framebuffers == nullptr) return;
 
@@ -112,6 +131,11 @@ void init_display(){
     main_vt = new virtual_terminal(fb);
 
     kprintf("dioOS build %s\n", __DATE__);
+
+    vnode_t *tty = vfs::create_path("/dev/tty", VLNK);
+
+    tty->file_operations.read_link = dev_tty_read_link;
+    tty->close();
 }
 
 void init_acpi(){
@@ -196,7 +220,6 @@ void init_kernel(){
     
     // Initialize the vfs layer
     vfs::initialize_vfs();
-    init_event_fs();
 
     init_display();
     check_boot_arguments();
@@ -226,6 +249,24 @@ void init_kernel(){
     task_t *init = task_scheduler::create_process("Kernel Subsystem Initialization", init_kernel_subsystems, false, false);
     init->affinity = 1; // Only BSP
     task_scheduler::mark_ready(init);
+}
+
+void acpi_set_apic_mode() {
+    ACPI_OBJECT_LIST arg_list;
+    ACPI_OBJECT arg[1];
+
+    arg_list.Count = 1;
+    arg_list.Pointer = arg;
+    arg[0].Type = ACPI_TYPE_INTEGER;
+    arg[0].Integer.Value = 1;
+
+    ACPI_STATUS status = AcpiEvaluateObject(ACPI_ROOT_OBJECT, (ACPI_STRING)"_PIC", &arg_list, NULL);
+    
+    if (ACPI_SUCCESS(status)) {
+        kprintf("[ACPI] Switched to IOAPIC mode via _PIC\n");
+    } else {
+        kprintf("[ACPI] _PIC method not found or failed: %s\n", AcpiFormatException(status));
+    }
 }
 
 void InitializeACPICA() {
@@ -267,6 +308,8 @@ void InitializeACPICA() {
         kprintf("AcpiInitializeObjects failed: %s\n", AcpiFormatException(status));
     }
 
+    acpi_set_apic_mode();
+
     embedded_controler_enable_gpes();
 
     setup_acpi_kernel_events();
@@ -302,6 +345,7 @@ void start_userspace(){
     task_t* task = execute_elf(fnode, 1, args, init_executables[i]);
     task->tgid = 1;
     task->pid = 1;
+    task->ctty = vfs::resolve_path("/dev/tty0");
 
     task_scheduler::mark_ready(task);
 }

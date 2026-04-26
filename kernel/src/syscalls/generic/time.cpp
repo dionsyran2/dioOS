@@ -20,22 +20,34 @@ long sys_gettimeofday(timeval *tv, timezone *tz){
 
     timeval t;
     t.tv_sec = current_time;
-    t.tv_usec = TSC::get_time_ns() / 1000;
+    t.tv_usec = (TSC::get_uptime_ns() / 1000ULL) % 1000000ULL;
 
     if (tv) self->write_memory(tv, &t, sizeof(t));
     return 0;
 }
 REGISTER_SYSCALL(SYS_gettimeofday, sys_gettimeofday);
 
-long sys_clock_gettime(int clockid, struct timespec *tp){
+#define CLOCK_REALTIME  0
+#define CLOCK_MONOTONIC 1
+
+long sys_clock_gettime(int clockid, struct timespec *tp) {
     task_t *self = task_scheduler::get_current_task();
+    if (!tp) return -EFAULT;
 
     timespec t;
-    t.tv_sec = current_time;
-    t.tv_nsec = TSC::get_time_ns();
 
-    if (tp) self->write_memory(tp, &t, sizeof(timespec));
+    if (clockid == CLOCK_MONOTONIC) {
+        uint64_t uptime_ns = TSC::get_uptime_ns(); 
+        t.tv_sec = uptime_ns / 1000000000ULL;
+        t.tv_nsec = uptime_ns % 1000000000ULL; 
+    } 
+    else { 
+        t.tv_sec = current_time;
+        t.tv_nsec = 0; 
+    }
 
+    self->write_memory(tp, &t, sizeof(timespec));
     return 0;
 }
+
 REGISTER_SYSCALL(SYS_clock_gettime, sys_clock_gettime);

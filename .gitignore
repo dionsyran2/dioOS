@@ -37,12 +37,4 @@ toolchain
 # Ignore everything in disk/
 disk
 
-# But keep specific files
-!disk/etc/
-!disk/etc/passwd
-!disk/etc/shadow
-!disk/etc/inittab
-!disk/etc/profile
-# Keep all fonts
-!disk/fonts/
-!disk/fonts/**
+setup/.config*

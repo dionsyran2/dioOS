@@ -6,7 +6,7 @@
 #include <filesystem/vfs/vfs.h>
 
 #define RING_SIZE       256
-
+#define EVDEV_VERSION   0x010001
 
 struct input_event{
     struct timeval time;
@@ -25,9 +25,10 @@ class event_node_t{
     private:
     spinlock_t lock = 0;
 
+    vnode_t* parent_node;
     input_event event_ring[RING_SIZE];
     volatile size_t head = 0;
     volatile size_t tail = 0;
 };
 
-void init_event_fs();
+vnode_t *create_event_file();

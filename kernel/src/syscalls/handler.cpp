@@ -3,7 +3,7 @@
 #include <memory/heap.h>
 #include <cpu.h>
 
-#define LOG_SYSCALLS
+// #define LOG_SYSCALLS
 
 syscall_function find_syscall(int id){
     for (syscall_definition_t* def = __start_syscalls; 
@@ -25,14 +25,12 @@ extern "C" uint64_t handle_syscall(__registers_t* registers){
     self->syscall_registers = registers;
     self->userspace_return_address = registers->rip;
 
-    if (self->signal_count == 0 && self->woke_by_signal){
-        self->woke_by_signal = false;
-    }
-
     syscall_function entry = find_syscall(registers->rax);
     if (entry == nullptr){
+        #ifdef LOG_SYSCALLS
         serialf("\e[0;31m[SYSCALL] (%d) #%d(%d, %d, %d, %d, %d, %d)\e[0m\n", self->pid, registers->rax, registers->rdi, 
             registers->rsi, registers->rdx, registers->r10, registers->r8, registers->r9);
+        #endif
         
         registers->rax = -ENOSYS;
 
@@ -41,11 +39,14 @@ extern "C" uint64_t handle_syscall(__registers_t* registers){
         return -ENOSYS;
     }
 
-    serialf("%d / %d\n", self->pid, registers->rax);
+    // serialf("%d / %d\n", self->pid, registers->rax);
     unsigned long ret = entry(registers->rdi, registers->rsi, registers->rdx,
         registers->r10, registers->r8, registers->r9);
 
-    
+    if (self->signal_count == 0 && self->woke_by_signal){
+        self->woke_by_signal = false;
+    }
+
     // LOG THE SYSCALL
     #ifdef LOG_SYSCALLS
     uint64_t args[6] = {registers->rdi, registers->rsi, registers->rdx,

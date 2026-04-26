@@ -19,7 +19,7 @@
 
 #define PS2_PRI_PORT_VECTOR         0x24
 #define PS2_SEC_PORT_VECTOR         0x25
-#define PCI_INT_PORT_VECTOR         0x26
+#define PCI_INT_VECTOR         0x26
 
 #define FIRST_FREE_VECTOR 0x50
 extern uint64_t FreeVector;

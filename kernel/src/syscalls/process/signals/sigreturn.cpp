@@ -19,6 +19,10 @@ int rt_sigreturn(){
     self->executing_syscall = false;
     self->signal_count--;
 
+    if (self->signal_count == 0){
+        self->signal_mask = self->saved_signal_mask;
+    }
+
     restore_fpu_state(self->saved_fpu_state);
     _execute_task(&self->registers);
     return 0; // Unreachable (_execute_task will change execution context)

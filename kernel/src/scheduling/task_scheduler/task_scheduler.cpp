@@ -12,19 +12,28 @@
 
 #define UTILIZATION_UPDATE_FREQUENCY 1000 // Every 1000 ticks (ms)
 
+void fd_list::lock(){
+    this->rflags = spin_lock(&this->spinlock);
+}
+
+void fd_list::unlock(){
+    spin_unlock(&this->spinlock, this->rflags);
+}
+
 /* TASK HELPERS */
 fd_t* task_t::get_fd(int num, bool lock){
     uint64_t rflags = 0;
-    if (lock) rflags = spin_lock(&file_descriptor_lock);
 
-    for (fd_t* fd = this->file_descriptors; fd != nullptr; fd = fd->next){
+    if (lock) file_list->lock();
+
+    for (fd_t* fd = this->file_list->file_descriptors; fd != nullptr; fd = fd->next){
         if (fd->num == num) {
-            if (lock) spin_unlock(&file_descriptor_lock, rflags);
+            if (lock) file_list->unlock();
             return fd;
         }
     }
 
-    if (lock) spin_unlock(&file_descriptor_lock, rflags);
+    if (lock) file_list->unlock();
     return nullptr;
 }
 
@@ -44,7 +53,7 @@ fd_t* task_t::open_node(vnode_t* node, int num){
     }
 
     // Open the actual file descriptor
-    uint64_t rflags = spin_lock(&file_descriptor_lock);
+    this->file_list->lock();
 
     while(1){
         fd_t* fd = get_fd(num, false);
@@ -59,18 +68,17 @@ fd_t* task_t::open_node(vnode_t* node, int num){
     fd->num = num;
     fd->offset = 0;
     fd->flags = O_RDWR;
-    fd->owner = this;
 
-    if (this->file_descriptors == nullptr){
-        this->file_descriptors = fd;
+    if (this->file_list->file_descriptors == nullptr){
+        this->file_list->file_descriptors = fd;
     } else {
-        fd_t *c = this->file_descriptors;
+        fd_t *c = this->file_list->file_descriptors;
         while (c->next) c = c->next;
 
         c->next = fd;
     }
 
-    spin_unlock(&file_descriptor_lock, rflags);
+    this->file_list->unlock();
     
     return fd;
 }
@@ -88,27 +96,29 @@ void task_t::close_fd(int num){
         entry->close();
     }
 
-    uint64_t rflags = spin_lock(&file_descriptor_lock);
+    this->file_list->lock();
 
 
     fd_t* prev = nullptr;
-    for (fd_t* fd = this->file_descriptors; fd != nullptr; fd = fd->next){
+    for (fd_t* fd = this->file_list->file_descriptors; fd != nullptr; fd = fd->next){
         if (fd->num == num) {
-            spin_unlock(&file_descriptor_lock, rflags);
             if (prev) {
                 prev->next = fd->next;
             } else {
-                this->file_descriptors = fd->next;
+                this->file_list->file_descriptors = fd->next;
             }
+
             if (fd->node) fd->node->close();
             delete fd;
-            break;
+
+            this->file_list->unlock();
+            return;
         }
         
         prev = fd;
     }
 
-    spin_unlock(&file_descriptor_lock, rflags);
+    this->file_list->unlock();
 }
 /*
 void* task_t::AllocatePage(bool COW){
@@ -180,7 +190,7 @@ bool task_t::read_memory(const void* address, void* buffer, size_t length){
         uint64_t phys = PTM->getPhysicalAddress((void*)user_va);
         
         if (phys == 0) return false;
-        if (!PTM->GetFlag((void*)(user_va & (~0xFFFUL)), PT_Flag::User)) return false; // Not user accessible
+        if (!PTM->GetFlag((void*)(user_va & (~0xFFFUL)), PT_Flag::User) && this->userspace) return false; // Not user accessible
 
 
         void* kernel_src = (void*)(physical_to_virtual(phys) + page_offset);
@@ -247,7 +257,7 @@ bool task_t::write_memory(void* address, const void* buffer, size_t length){
             return false;
         }
         
-        if (!PTM->GetFlag((void*)(user_va & (~0xFFFUL)), PT_Flag::User)) {
+        if (!PTM->GetFlag((void*)(user_va & (~0xFFFUL)), PT_Flag::User) && this->userspace) {
             kprintf("\nACCESS FAULT\n");
             return false;
         } // Not user accessible
@@ -321,24 +331,34 @@ void task_t::exit(int status, bool silent){
             futex_wake((uint32_t*)this->ptm->getPhysicalAddress(this->clear_child_tid), FUTEX_WAKE, UINT32_MAX);
         }
         
-        /*if (this->signal_parent_on_exit){
+        if (this->signal_parent_on_exit){
             task_t *parent = task_scheduler::get_process(this->ppid);
 
             if (parent){
                 parent->kernel_signals |= (1 << (SIGCHLD - 1));
                 parent->pending_signals |= (1 << (SIGCHLD - 1));
             }
-        }*/
+        }
+        
+        if (this->ctty){
+            this->ctty->close();
+            this->ctty = nullptr;
+        }
     }
-    
 
     cpu_local_data *local = get_cpu_local_data();
     asm ("mov %0, %%rsp" :: "r" (local->scheduler_stack));
 
-    for (fd_t *fd = this->file_descriptors; fd != nullptr;){
-        fd_t* ofd = fd;
-        fd = fd->next;
-        if (ofd->owner == this) close_fd(ofd->num);
+    int ref = __atomic_sub_fetch(&this->file_list->ref_cnt, 1, __ATOMIC_SEQ_CST);
+
+    if (!ref){
+        for (fd_t *fd = this->file_list->file_descriptors; fd != nullptr;){
+            fd_t* ofd = fd;
+            fd = fd->next;
+            close_fd(ofd->num);
+        }
+
+        delete this->file_list;
     }
 
     this->status_code = (status << 8);
@@ -363,7 +383,7 @@ void task_t::exit(int status, bool silent){
     
     if (!silent) {
         task_scheduler::_wake_waiting_tasks(this->pid);
-        serialf("EXIT pid: %d, tgid: %d, status: %d.\n", pid, tgid, status);
+        if (!is_krnl) serialf("EXIT pid: %d, tgid: %d, status: %d.\n", pid, tgid, status);
     }
 
     bool should_swap = task_scheduler::get_current_task() == this;
@@ -582,13 +602,13 @@ namespace task_scheduler
         task->vm_tracker = new vm_tracker_t;
         task->start_time = GetTicks();
 
+        task->file_list = new fd_list;
         PageTableManager* ptm = &globalPTM;
 
         if (create_ptm){
             ptm = new PageTableManager((PageTable*)GlobalAllocator.RequestPage(), task->vm_tracker);
 
             task->vm_tracker->mark_allocation((uint64_t)ptm->PML4, PAGE_SIZE, VM_FLAG_RW | VM_FLAG_DO_NOT_SHARE);
-            serialf("task: %s\n", name);
 
             memset(ptm->PML4, 0, PAGE_SIZE);
 
@@ -628,8 +648,7 @@ namespace task_scheduler
         }
 
         vnode_t *root = vfs::resolve_path("/");
-        task->cwd = task->open_node(root, 0x99);
-
+        task->file_list->cwd = root;
         _init_task_fpu(task);
         _add_task_to_list(task);
 
@@ -680,16 +699,29 @@ namespace task_scheduler
         }
 
         /* Copy the FDs */
-        /*if (share_files){
-            task->file_descriptors = process->file_descriptors;
-        } else {*/
-            for (fd_t* fd = process->file_descriptors; fd != nullptr; fd = fd->next){
+        if (share_files){
+            __atomic_fetch_add(&process->file_list->ref_cnt, 1, __ATOMIC_SEQ_CST);
+            delete task->file_list;
+            task->file_list = process->file_list;
+        } else {
+            process->file_list->lock();
+            for (fd_t* fd = process->file_list->file_descriptors; fd != nullptr; fd = fd->next){
                 fd->node->open();
-                task->open_node(fd->node, fd->num);
+                fd_t *new_fd = task->open_node(fd->node, fd->num);
+                
+                new_fd->offset = fd->offset;
+                new_fd->flags = fd->flags;
             }
-        //}
 
-        if (process->cwd) task->cwd = task->get_fd(process->cwd->num);
+            task->file_list->cwd = process->file_list->cwd;
+            process->file_list->unlock();
+        }
+
+        if (process->ctty){
+            process->ctty->open();
+            task->ctty = process->ctty;
+        }
+
     
         task->ruid = process->ruid;
         task->rgid = process->rgid;
@@ -741,6 +773,7 @@ namespace task_scheduler
 
         task->vm_tracker = new vm_tracker_t();
         task->start_time = GetTicks();
+        task->file_list = new fd_list;
         
         PageTableManager* ptm = new PageTableManager((PageTable*)GlobalAllocator.RequestPage(), task->vm_tracker);
         task->vm_tracker->mark_allocation((uint64_t)ptm->PML4, PAGE_SIZE, VM_FLAG_RW | VM_FLAG_DO_NOT_SHARE);
@@ -785,7 +818,7 @@ namespace task_scheduler
         task->egid = victim->egid;
         task->suid = victim->suid;
         task->sgid = victim->sgid;
-
+        
         if (victim->proc_vfs_dir){
             victim->proc_vfs_dir->rmdir();
             victim->proc_vfs_dir = nullptr;
@@ -800,18 +833,29 @@ namespace task_scheduler
             task->proc_vfs_dir->gid = task->rgid;
             task->proc_vfs_dir->close();
         }
-        _add_dynamic_task_virtual_files(task);
 
-        for (fd_t* fd = victim->file_descriptors; fd != nullptr; fd = fd->next){
-            if (fd->flags & O_CLOEXEC) continue;
-            fd->node->open();
-            task->open_node(fd->node, fd->num);
+        if (victim->ctty){
+            victim->ctty->open();
+            task->ctty = victim->ctty;
         }
 
+        _add_dynamic_task_virtual_files(task);
+
+        victim->file_list->lock();
+        for (fd_t* fd = victim->file_list->file_descriptors; fd != nullptr; fd = fd->next){
+            if (fd->flags & O_CLOEXEC) continue;
+            fd->node->open();
+
+            fd_t *new_fd = task->open_node(fd->node, fd->num);
+            new_fd->offset = fd->offset;
+            new_fd->flags = fd->flags;
+        }
+        victim->file_list->unlock();
+
         bool set_cwd_to_root = false;
-        if (victim->cwd){
-            task->cwd = task->get_fd(victim->cwd->num);
-            if (!task->cwd)
+        if (victim->file_list->cwd){
+            task->file_list->cwd = victim->file_list->cwd;
+            if (!task->file_list->cwd)
                 set_cwd_to_root = true;
         } else {
             set_cwd_to_root = true;
@@ -820,7 +864,7 @@ namespace task_scheduler
         if (set_cwd_to_root){
             vnode_t *root = vfs::resolve_path("/");
 
-            task->cwd = task->open_node(root, 0x99);
+            task->file_list->cwd = root;
         }
         
         _init_task_fpu(task);
@@ -840,11 +884,9 @@ namespace task_scheduler
             if ((signal_set & (1UL << i)) == 0 || (task->signal_mask & (1UL << i))) continue;
 
             // Signal is set.
+            int signal = i + 1;
 
             // Default
-            serialf("Signal : %d %d\n", i + 1, task->signal_actions[i].sa_handler);
-
-            int signal = i + 1;
             if (task->signal_actions[i].sa_handler == SIG_DFL){
                 if (signal == SIGHUP || signal == SIGINT || signal == SIGKILL || signal == SIGTERM || 
                     signal == SIGABRT || signal == SIGSEGV || signal == SIGILL || signal == SIGFPE || 
@@ -912,12 +954,12 @@ namespace task_scheduler
                 signal_set &= ~(1UL << i);
                 task->kernel_signals &= ~(1UL << i);
 
+                task->saved_signal_mask = task->signal_mask;
+
                 // Mask the signal
                 if ((task->signal_actions[i].sa_flags & SA_NODEFER) == 0) {
                     task->signal_mask |= (1UL << i);
                 }
-
-                if (task->task_state == BLOCKED) task->woke_by_signal = true;
                 break;
             }
 
@@ -928,6 +970,10 @@ namespace task_scheduler
         }
 
         task->pending_signals = signal_set;
+
+        if (task->pending_signals & (~task->signal_mask) == 0 && task->next_signal_mask){
+            task->signal_mask = task->next_signal_mask;
+        }
     }
     
     void _run_task(task_t* task, cpu_local_data* local){
@@ -963,12 +1009,18 @@ namespace task_scheduler
         local->userspace_return_address = task->userspace_return_address;
         write_msr(IA32_FS_BASE, task->fs_pointer);
         restore_fpu_state(task->saved_fpu_state);
+
+        task->quantum_start = TSC::get_uptime_ns() / 1000;
         _execute_task(&task->registers);
     }
 
     bool _should_unblock(task_t* task){
         if (task->task_state != BLOCKED) return false;
-        if (task->pending_signals) return true;
+        if (task->pending_signals & (~task->signal_mask)) {
+            //serialf("SIG_UNBLOCK %d: %d %d %d\n", task->pid, task->pending_signals, task->signal_mask, task->pending_signals & (~task->signal_mask));
+            task->woke_by_signal = true;
+            return true;
+        }
 
         if (task->block_type == MEMORY_NON_ZERO){
             uint8_t buffer = 0;
@@ -982,6 +1034,8 @@ namespace task_scheduler
     }
     // @warning Assumes the lock is held!!!
     task_t* _get_free_task(int cpu_id){
+        task_t *candidate = nullptr;
+
         for (task_t* current = task_list; current != nullptr; current = current->next){
             if (!current->is_ready) continue;
             
@@ -990,12 +1044,16 @@ namespace task_scheduler
                 current->task_state == ZOMBIE ||
                 current->counter == 0 || (current->affinity & (1UL << cpu_id)) == 0) continue;
 
-            /* If its able to be run, return it */
-            return current;
+            if (!candidate){
+                candidate = current;
+                continue;
+            }
+
+            if (candidate->priority < current->priority) candidate = current;
         }
 
         // No runnable task found
-        return nullptr;
+        return candidate;
     }
 
     // @warning Assumes the lock is held!!!
@@ -1004,6 +1062,25 @@ namespace task_scheduler
 
         for (task_t* current = task_list; current != nullptr; current = current->next){
             // Check if it should be reset / Unblocked. (If its running, skip it)
+
+            if (current->alarm && (current->prev_alarm + current->alarm) < current_time){
+                current->pending_signals |= (1UL << (SIGALRM - 1));
+                current->kernel_signals |= (1UL << (SIGALRM - 1));
+                current->prev_alarm = current->alarm = 0;
+            } else if (current->itimer_next_expiration != 0 && (TSC::get_uptime_ns() / 1000000ULL) >= current->itimer_next_expiration) {
+        
+                // Queue the SIGALRM!
+                current->pending_signals |= (1ULL << (SIGALRM - 1));
+                current->kernel_signals |= (1UL << (SIGALRM - 1));
+
+                // Reload the Metronome!
+                if (current->itimer_interval > 0) {
+                    current->itimer_next_expiration += current->itimer_interval;
+                } else {
+                    current->itimer_next_expiration = 0; // It was a one-shot timer
+                }
+            }
+
             if (current->task_state == RUNNING || (current->affinity & (1UL << cpu_id)) == 0) continue;
 
             // Check if scheduled time has passed
@@ -1053,6 +1130,9 @@ namespace task_scheduler
         asm ("cli");
         asm ("mov %0, %%rsp" :: "r" (local->scheduler_stack));
 
+        if (local->current_task){
+            local->current_task->cpu_time += (TSC::get_uptime_ns() / 1000) - local->current_task->quantum_start;
+        }
         
         // Acquire a lock for the task list
         uint64_t flags = spin_lock(&task_list_lock);
@@ -1096,7 +1176,6 @@ namespace task_scheduler
         
         if (local->current_task->counter > 0) {
             local->current_task->counter--;
-            local->current_task->cpu_time++;
         }
 
         if (local->current_task->userspace){

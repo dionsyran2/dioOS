@@ -970,7 +970,7 @@
 
 #define LED_NUML		0x00
 #define LED_CAPSL		0x01
-#define LED_SCROLLL		0x02
+#define LED_SCROLL		0x02
 #define LED_COMPOSE		0x03
 #define LED_KANA		0x04
 #define LED_SLEEP		0x05

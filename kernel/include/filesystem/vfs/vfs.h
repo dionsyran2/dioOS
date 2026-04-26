@@ -15,3 +15,7 @@ namespace vfs{
 }
 
 vnode_t* create_root_node_fs(vnode_t* blk);
+
+namespace filesystems{
+    int acquire_dev_id();
+}

@@ -7,6 +7,8 @@
 #include <kstdio.h>
 #include <scheduling/apic/ioapic.h>
 #include <drivers/ps2/keyboard.h>
+#include <drivers/ps2/mouse.h>
+
 
 const char* ps2_port_test_codes[] = {
     "Success",
@@ -132,51 +134,44 @@ namespace ps2{
         }
     }
 
-    void start_ps2_driver(int ident){
-        // Check what device is plugged in
-        send_port_cmd(ident, PS2_DEV_DISABLE_SCANNING);
-        uint16_t res = read_res();
-        if (res != 0xFA){
-            kprintf("[PS2] Disable Scanning command failed with code: %.2x\n", res);
-            return;
-        }
-
-
-        send_port_cmd(ident, PS2_DEV_IDENTIFY);
-        res = read_res();
-        if (res != 0xFA){
-            kprintf("[PS2] Identify command failed with code: %.2x\n", res);
-            return;
-        }
-
-
-        // Read the response
-        uint8_t bytes[2] = {0, 0};
-
-        for (int i = 0; i < 2; i++){
-            uint16_t r = read_res();
-            if (r == 0x100) break;
-
-            bytes[i] = r;
-        }
-
-        //kprintf("DEVICE @%d, %.2x %.2x\n", ident, bytes[0], bytes[1]);
-
-        if (bytes[0] == 0xAB && 
-            (bytes[1] == 0x83 || bytes[1] == 0x41 ||
-             bytes[1] == 0xC1 || bytes[1] == 0x84 ||
-             bytes[1] == 0x54)
-        ){
-            ps2_kb::init_kb(ident);
-        }
-    }
-
+    
     void flush(){
         int limit = 10000;
         while ((inb(PS2_STATUS) & 1) && limit--) {
             inb(PS2_DATA); // Discard
             nanosleep(10);
         }
+    }
+
+    void start_ps2_driver(int ident) {
+        flush(); // Clear any junk
+
+        // Disable Scanning
+        send_port_cmd(ident, PS2_DEV_DISABLE_SCANNING); 
+        if (read_res() != 0xFA) return;
+
+        // 2. Identify
+        send_port_cmd(ident, PS2_DEV_IDENTIFY);
+        if (read_res() != 0xFA) return;
+
+        // 3. Read ID (Wait up to 10ms for first byte)
+        uint16_t b1 = read_res();
+        if (b1 == 0x100) return; // Timeout
+
+        if (b1 == 0x00 || b1 == 0x03 || b1 == 0x04) {
+            kprintf("[PS2] Mouse detected on port %d (ID: %x)\n", ident, b1);
+            ps2_mouse::init_driver(ident);
+            return;
+        }
+
+        if (b1 == 0xAB) {
+            uint16_t b2 = read_res();
+            kprintf("[PS2] Keyboard detected on port %d (ID: AB %x)\n", ident, b2);
+            ps2_kb::init_kb(ident);
+            return;
+        }
+        
+        kprintf("[PS2] Unknown device on port %d: %x\n", ident, b1);
     }
 
     void initialize_ps2(){

@@ -9,7 +9,7 @@ LD = ld
 GAS = gcc
 
 CFLAGS = -g -fno-builtin -Wno-write-strings -ffreestanding -fshort-wchar -mno-red-zone -fno-exceptions -fno-omit-frame-pointer -O0 $(INCLUDE_FLAGS)
-CPPFLAGS = -g -fno-builtin -Wno-write-strings -ffreestanding -fshort-wchar -mno-red-zone -fno-exceptions -fno-omit-frame-pointer -fno-rtti $(INCLUDE_FLAGS)
+CPPFLAGS = -g -O0 -fno-builtin -fno-use-cxa-atexit -Wno-write-strings -ffreestanding -fshort-wchar -mno-red-zone -fno-exceptions -fno-omit-frame-pointer -fno-rtti $(INCLUDE_FLAGS)
 ASMFLAGS = -g
 GASFLAGS = -g -c
 LDFLAGS = -T $(LDS) -static -Bsymbolic -nostdlib
@@ -103,9 +103,9 @@ link: $(OBJS)
 	@ $(LD) $(LDFLAGS) -o $(BUILDDIR)/kernel.elf $(OBJS)
 
 setup:
-	@mkdir $(BUILDDIR)
-	@mkdir $(SRCDIR)
-	@mkdir $(OBJDIR)
-
+	@if [ ! -d $(BUILDDIR) ]; then \
+		@mkdir $(BUILDDIR); \
+	fi
+	
 clean:
 	rm -rf lib

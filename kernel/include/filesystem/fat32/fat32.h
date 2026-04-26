@@ -70,6 +70,7 @@ namespace filesystems {
         
         void _calculate_space();
         public:
+        int dev_id;
         vnode_t* blk;
         vnode_t* root_node;
 

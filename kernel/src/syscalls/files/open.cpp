@@ -20,6 +20,12 @@ long sys_open(const char* ustring, int flags, int mode){
     }
 
     if (!node) return -ENOENT;
+
+    if (node->file_operations.special_open) {
+        int ret = node->file_operations.special_open(node);
+        node->close();
+        return ret;
+    }
     
     uint8_t required_perms = 0;
     if ((flags & 0b11) == O_WRONLY) required_perms |= 02;
@@ -54,6 +60,12 @@ uint64_t sys_openat(int dirfd, const char* ustring, int flags, int mode){
     }
 
     if (!node) return -ENOENT;
+
+    if (node->file_operations.special_open) {
+        int ret = node->file_operations.special_open(node);
+        node->close();
+        return ret;
+    }
     
     uint8_t required_perms = 0;
     if ((flags & 0b11) == O_WRONLY) required_perms |= 02;

@@ -363,6 +363,13 @@ int kexecve(const char* pathname, int argc, const char* argv[], int envc, const 
 
     task_t* task = task_scheduler::clone_for_execve(self);
     strcpy(task->executable_name, executable->name);
+    
+    if (executable->permissions & 04000) { 
+        task->euid = executable->uid; // Elevate to the file owner (usually 0)
+    }
+    if (executable->permissions & 02000) {
+        task->egid = executable->gid; // Elevate to the file group
+    }
 
     memset(task->name, 0, sizeof(task->name));
     memcpy(task->name, executable->name, min(strlen(executable->name), sizeof(task->name)-1));

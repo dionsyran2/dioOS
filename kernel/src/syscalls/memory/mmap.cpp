@@ -94,7 +94,7 @@ REGISTER_SYSCALL(SYS_unmap, sys_unmap);
 
 
 int sys_mprotect(void* addr, size_t len, int prot){
-    const unsigned long PAGE_MASK = ~(PAGE_SIZE - 1);
+    /*const unsigned long PAGE_MASK = ~(PAGE_SIZE - 1);
 
     unsigned long aligned_addr = (unsigned long)addr & PAGE_MASK;
 
@@ -143,7 +143,7 @@ int sys_mprotect(void* addr, size_t len, int prot){
         }
 
         self->vm_tracker->set_flags((uint64_t)caddr, 0x1000, new_flags);
-    }
+    }*/
 
     return 0;
 }

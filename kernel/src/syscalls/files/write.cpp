@@ -9,6 +9,8 @@
 #define WRITE_WINDOW 0x4000 // 16KB chunk size
 #define UIO_MAXIOV 1024
 
+int64_t sendto(int sockfd, const void *buf, size_t size, int flags, const struct sockaddr *dest_addr, uint64_t addrlen);
+
 long sys_write(int fd, const void* data, size_t len){
     task_t* self = task_scheduler::get_current_task();
     fd_t* ofd = self->get_fd(fd);
@@ -19,6 +21,7 @@ long sys_write(int fd, const void* data, size_t len){
         return -EACCES;
     }
 
+    if (ofd->node->type == VSOC) return sendto(fd, data, len, 0, nullptr, 0);
     if (ofd->node->type == VDIR) return -EISDIR;
 
     if (ofd->flags & O_APPEND)

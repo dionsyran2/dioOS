@@ -99,6 +99,8 @@ namespace pci{
     void enumerate_pci();
 
     uint64_t get_device_bar(pci_device_header* device, uint8_t bar);
+
+    void register_isr(void (handler)(void*), void *cb);
 }
 
 

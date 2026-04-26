@@ -20,7 +20,7 @@ inline void fix_path(const char* orig, char* buffer, size_t size, task_t* ctask)
     char* pathname = original;
 
     if (pathname[0] == '.' && (pathname[1] == '/' || pathname[1] == '\0')) {
-        char* cwd = vfs::get_full_path_name(ctask->cwd->node);
+        char* cwd = vfs::get_full_path_name(ctask->file_list->cwd);
 
         // Remove leading './'
         char* rel = pathname + 1;
@@ -45,7 +45,7 @@ inline void fix_path(const char* orig, char* buffer, size_t size, task_t* ctask)
         free(cwd);
         // serialf("redirected path to %s\n\r", pathname);
     }else if (pathname[0] != '/'){
-        char* cwd = vfs::get_full_path_name(ctask->cwd->node);
+        char* cwd = vfs::get_full_path_name(ctask->file_list->cwd);
 
          // Calculate the size with space for '/' and null terminator
         size_t cwd_len = strlen(cwd);
@@ -78,14 +78,20 @@ inline void fix_path(const char* orig, char* buffer, size_t size, task_t* ctask)
 inline void kfix_path(const char* original, char* buffer, size_t size, task_t* ctask){
     char* pathname = (char*)original;
 
-    if (pathname[0] == '.' && (pathname[1] == '/' || pathname[1] == '\0')) {
-        char* cwd = vfs::get_full_path_name(ctask->cwd->node);
+    if (pathname[0] != '/') {
+        
+        char* cwd = nullptr;
+        if (ctask->file_list->cwd != nullptr && ctask->file_list->cwd != nullptr) {
+            cwd = vfs::get_full_path_name(ctask->file_list->cwd);
+        } else {
+            cwd = (char*)malloc(2); 
+            strcpy(cwd, "/");
+        }
 
-        // Remove leading './'
-        char* rel = pathname + 1;
-        if (*rel == '/') rel++;
+        char* rel = pathname;
+        if (rel[0] == '.' && rel[1] == '/') rel += 2;
+        else if (rel[0] == '.' && rel[1] == '\0') rel += 1;
 
-        // Calculate the size with space for '/' and null terminator
         size_t cwd_len = strlen(cwd);
         size_t rel_len = strlen(rel);
         bool need_slash = (cwd[cwd_len - 1] != '/' && rel_len > 0);
@@ -96,42 +102,16 @@ inline void kfix_path(const char* original, char* buffer, size_t size, task_t* c
         if (need_slash) strcat(path, "/");
         strcat(path, rel);
 
-        // Optional cleanup: remove trailing slash unless root
         size_t len = strlen(path);
         if (len > 1 && path[len - 1] == '/') path[len - 1] = '\0';
 
         pathname = path;
-        free(cwd);
-        // serialf("redirected path to %s\n\r", pathname);
-    }else if (pathname[0] != '/'){
-        char* cwd = vfs::get_full_path_name(ctask->cwd->node);
-
-         // Calculate the size with space for '/' and null terminator
-        size_t cwd_len = strlen(cwd);
-        size_t rel_len = strlen(pathname);
-        bool need_slash = (cwd[cwd_len - 1] != '/' && rel_len > 0);
-        size_t total_len = cwd_len + (need_slash ? 1 : 0) + rel_len + 1;
-
-        char* path = (char*)alloca(total_len);
-        strcpy(path, cwd);
-        if (need_slash) strcat(path, "/");
-        strcat(path, pathname);
-
-        // Optional cleanup: remove trailing slash unless root
-        size_t len = strlen(path);
-        if (len > 1 && path[len - 1] == '/') path[len - 1] = '\0';
-
-        pathname = path;
-        free(cwd);
-
-        // serialf("redirected path to %s\n\r", pathname);
+        free(cwd); 
     }
 
     int to_copy = min(size, strlen(pathname) + 1);
     memcpy(buffer, pathname, to_copy);
-
     buffer[to_copy - 1] = '\0';
-    //serialf("redirected path from %s to %s\n\r", original, buffer);
 }
 
 inline void fix_path(int dirfd, const char* orig, char* buffer, size_t size, task_t* ctask){
@@ -145,7 +125,7 @@ inline void fix_path(int dirfd, const char* orig, char* buffer, size_t size, tas
     char* pathname = original;
 
     if (original[0] == '.' && (original[1] == '/' || original[1] == '\0')) {
-        char* cwd = vfs::get_full_path_name(dirfd == AT_FDCWD ? ctask->cwd->node : dir->node);
+        char* cwd = vfs::get_full_path_name(dirfd == AT_FDCWD ? ctask->file_list->cwd : dir->node);
 
 
         // Remove leading './'
@@ -170,7 +150,7 @@ inline void fix_path(int dirfd, const char* orig, char* buffer, size_t size, tas
         pathname = path;
         // serialf("redirected path to %s\n\r", pathname);
     }else if (pathname[0] != '/' && (dir != nullptr || dirfd == AT_FDCWD)){
-            char* cwd = vfs::get_full_path_name(dirfd == AT_FDCWD ? ctask->cwd->node : dir->node);
+            char* cwd = vfs::get_full_path_name(dirfd == AT_FDCWD ? ctask->file_list->cwd : dir->node);
 
 
          // Calculate the size with space for '/' and null terminator

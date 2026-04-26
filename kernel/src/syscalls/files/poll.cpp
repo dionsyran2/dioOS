@@ -47,40 +47,34 @@ long sys_poll(pollfd *ufds, int nfds, int timeout_ms) {
 
     asm ("sti");
     while (true) {
-        self->ScheduleFor(5, BLOCKED);
-
         any_ready = false;
 
         for (int i = 0; i < nfds; ++i) {
             fds[i].revents = 0;
             fd_t* fd = self->get_fd(fds[i].fd);
-
             if (!fd) continue;
 
-            if ((fds[i].events & POLLIN) && fd->node->data_ready_to_read) {
+            if ((fds[i].events & POLLIN) && fd->node->pollout()) {
                 fds[i].revents |= POLLIN;
                 any_ready = true;
             }
-
-            if (fds[i].events & POLLOUT && fd->node->ready_to_receive_data) {
+            if ((fds[i].events & POLLOUT) && fd->node->pollin()) {
                 fds[i].revents |= POLLOUT;
                 any_ready = true;
             }
         }
 
-        if (any_ready){
+        if (any_ready) {
             self->write_memory(ufds, fds, sizeof(pollfd) * nfds);
-            return nfds; // you could count the number of ready fds too
+            return nfds;
         }
 
-        if (timeout_ms == 0){
+        if (timeout_ms == 0) return 0;
+        if (timeout_ms > 0 && (GetTicks() - start_time) >= (uint64_t)timeout_ms) {
             return 0;
         }
 
-        if (timeout_ms > 0 && (GetTicks() - start_time) >= (uint64_t)timeout_ms){
-            return 0;
-        }
-
+        self->ScheduleFor(20, BLOCKED, WAITING_ON_EVENT);
     }
     
     return -EAGAIN; // unreachable
@@ -88,7 +82,7 @@ long sys_poll(pollfd *ufds, int nfds, int timeout_ms) {
 
 REGISTER_SYSCALL(SYS_poll, sys_poll);
 
-long sys_pselect(int nfds, fd_set* readfds_src, fd_set* writefds_src, fd_set* exceptfds_src, const timespec* timeout, void* sigmask){
+long sys_pselect(int nfds, fd_set* readfds_src, fd_set* writefds_src, fd_set* exceptfds_src, const timespec* timeout, kernel_sigset_t* sigmask){
     task_t* self = task_scheduler::get_current_task();
     
     fd_set rfd, wfd, efd, outrfd, outwfd, outefd;
@@ -129,6 +123,15 @@ long sys_pselect(int nfds, fd_set* readfds_src, fd_set* writefds_src, fd_set* ex
     int ready = 0;
 
     uint64_t start_time = GetTicks();
+
+    kernel_sigset_t old_mask = self->signal_mask;
+
+    if (sigmask) {
+        kernel_sigset_t new_mask;
+        self->read_memory(sigmask, &new_mask, sizeof(kernel_sigset_t));
+        self->signal_mask = new_mask; // Swap masks
+    }
+
     while (true){
         bool any_ready = false;
 
@@ -139,12 +142,12 @@ long sys_pselect(int nfds, fd_set* readfds_src, fd_set* writefds_src, fd_set* ex
             if (!ofd) continue;
 
 
-            if (readfds_src && FD_ISSET(fd, &rfd) && ofd->node->data_ready_to_read) {
+            if (readfds_src && FD_ISSET(fd, &rfd) && ofd->node->pollout()) {
                 is_ready = true;
                 FD_SET(fd, &outrfd);
             }
 
-            if (writefds_src && FD_ISSET(fd, &wfd) && ofd->node->ready_to_receive_data) {
+            if (writefds_src && FD_ISSET(fd, &wfd) && ofd->node->pollin()) {
                 is_ready = true;
                 FD_SET(fd, &outwfd);
             }
@@ -169,12 +172,20 @@ long sys_pselect(int nfds, fd_set* readfds_src, fd_set* writefds_src, fd_set* ex
         if (timeout_ms > 0 && (GetTicks() - start_time) >= (uint64_t)timeout_ms){
             break;
         }
+
+        self->ScheduleFor(10, BLOCKED, WAITING_ON_EVENT);
+
+        if (self->woke_by_signal && self->signal_count == 0) {
+            self->next_signal_mask = old_mask; 
+            return -EINTR;
+        }
     }
 
     if (readfds_src) self->write_memory(readfds_src, &outrfd, sizeof(fd_set));
     if (writefds_src) self->write_memory(writefds_src, &outwfd, sizeof(fd_set));
     if (exceptfds_src) self->write_memory(exceptfds_src, &outefd, sizeof(fd_set));
 
+    self->signal_mask = old_mask;
     return ready;
 }
 

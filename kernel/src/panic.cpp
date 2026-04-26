@@ -4,8 +4,6 @@
 #include <interrupts/interrupts.h>
 
 void panic(const char* str, ...){
-    send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
-
     va_list args;
     va_start(args, str);
 

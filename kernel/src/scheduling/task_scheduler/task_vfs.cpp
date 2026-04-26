@@ -1,5 +1,6 @@
 #include <scheduling/task_scheduler/task_scheduler.h>
 #include <filesystem/vfs/vfs.h>
+#include <drivers/timers/common.h>
 #include <cstr.h>
 
 // Read /proc/x/stat
@@ -29,10 +30,22 @@ int read_task_stat(uint64_t offset, uint64_t length, void* buffer, vnode_t* this
             break;
     }
 
+    uint64_t current_cpu_time = task->cpu_time;
+
+    // If the task is currently running on any CPU, add the time since its quantum started
+    if (task->task_state == RUNNING) {
+        uint64_t now = TSC::get_uptime_ns() / 1000;
+        if (now > task->quantum_start) {
+            current_cpu_time += (now - task->quantum_start);
+        }
+    }
+
+    current_cpu_time = current_cpu_time / 10000;
+
     /* https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html */
     int l = stringf((char*)buffer, length, "%d (%s) %c %d %d %d 0 0 %d 0 0 0 0 %d %d %d %d %d %d %d %d %d %d %d", 
         task->pid, task->executable_name, state, task->ppid, task->pgid, task->sid, 0 /* Process Flags */,
-        task->cpu_time, 0 /* Time in kernel mode */, 0 /* cstime? */, 0 /* priority */, 0 /* nice */,
+        current_cpu_time, 0 /* Time in kernel mode */, 0 /* cstime? */, 0 /* priority */, 0 /* nice */,
         0 /* num_threads */, 0, task->start_time, task->vm_tracker->total_marked_memory, task->vm_tracker->total_marked_memory / 0x1000,
         UINT64_MAX);
 
@@ -75,22 +88,33 @@ int _read_proc_stat(uint64_t offset, uint64_t length, void* buffer, vnode_t* thi
 
     uint64_t total_usr = 0, total_sys = 0, total_idle = 0;
     for (cpu_local_data *d = bsp_local; d != nullptr; d = d->next) {
-        total_usr += d->time_in_userspace;
-        total_sys += d->time_in_kernel;
-        total_idle += d->idle_time;
+        total_usr += d->time_in_userspace / 10;
+        total_sys += d->time_in_kernel / 10;
+        total_idle += d->idle_time / 10;
     }
 
-    // 2. Aggregate line (MUST start with 'cpu ' and no index)
+    // Aggregate line (MUST start with 'cpu ' and no index)
     off += stringf((char *)buffer + off, length - off, 
-                   "cpu  %lu 0 %lu %lu 0 0 0 0 0 0\n", 
+                   "cpu %lu 0 %lu %lu 0 0 0 0 0 0\n", 
                    total_usr, total_sys, total_idle);
+
+    for (cpu_local_data *d = bsp_local; d != nullptr; d = d->next) {
+        uint64_t idle = d->idle_time;
+        if (d->current_task == d->idle_task) {
+             uint64_t now = TSC::get_uptime_ns() / 1000;
+             idle += (now - d->idle_task->quantum_start);
+        }
+        total_usr += d->time_in_userspace / 10;
+        total_sys += d->time_in_kernel / 10;
+        total_idle += idle / 10;
+    }
 
     for (cpu_local_data *data = bsp_local; data != nullptr; data = data->next){
         if (rem_length <= 0) break;
 
         int r = stringf((char*)buffer + off, rem_length, "cpu%d %d %d %d %d 0 0 0 0 0 0\n",
-                        data->cpu_id, data->time_in_userspace, 0 /* NICE */,
-                        data->time_in_kernel /* System */, data->idle_time);
+                        data->cpu_id, data->time_in_userspace / 10, 0 /* NICE */,
+                        data->time_in_kernel  / 10 /* System */, data->idle_time / 10);
 
         off += r;
         rem_length -= r;

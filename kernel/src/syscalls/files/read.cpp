@@ -7,6 +7,8 @@
 
 #define READ_WINDOW 0x4000
 
+int sys_recvfrom(int sockfd, void *buf, size_t size, int flags, const struct sockaddr *source_addr, uint64_t addrlen);
+
 long sys_read(int fd, char* user_buffer, size_t count){
     task_t* self = task_scheduler::get_current_task();
 
@@ -14,6 +16,7 @@ long sys_read(int fd, char* user_buffer, size_t count){
     if (ofd == nullptr) return -EBADF;
     if (ofd->node->type == VDIR) return -EISDIR;
 
+    if (ofd->node->type == VSOC) return sys_recvfrom(fd, user_buffer, count, 0, nullptr, 0);
     /*if ((ofd->flags & O_WRONLY) == O_WRONLY)
         return -EACCES;*/
 
@@ -25,7 +28,7 @@ long sys_read(int fd, char* user_buffer, size_t count){
 
     size_t i = 0;
     while (i < count){
-        if ((ofd->flags & O_NONBLOCK) == O_NONBLOCK && !ofd->node->data_ready_to_read) return -EWOULDBLOCK;
+        if ((ofd->flags & O_NONBLOCK) == O_NONBLOCK && !ofd->node->pollout()) return -EWOULDBLOCK;
 
         size_t remaining_to_read = count - i;
 

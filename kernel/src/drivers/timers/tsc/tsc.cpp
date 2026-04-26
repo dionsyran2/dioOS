@@ -8,6 +8,8 @@ namespace TSC{
     uint64_t tsc_ticks_per_ns = 0;
     uint64_t prev_tsc_count = 0;
 
+    uint64_t boot_tsc_count = 0;
+
     void update_prev_cnt(){
         prev_tsc_count = _rdtsc();
     }
@@ -16,10 +18,15 @@ namespace TSC{
         return (_rdtsc() - prev_tsc_count) / tsc_ticks_per_ns;
     }
 
+    uint64_t get_uptime_ns() {
+        return (_rdtsc() - boot_tsc_count) / tsc_ticks_per_ns;
+    }
+
     void calibrate_tsc(){
         if (is_hpet_enabled) tsc_ticks_per_ns = HPET::calibrate_tsc();
         if (is_pit_enabled) tsc_ticks_per_ns = PIT::calibrate_tsc();
-
+        
+        boot_tsc_count = _rdtsc();
         //kprintf("TSC Calibrated: %d ticks per ns\n", tsc_ticks_per_ns);
     }
 

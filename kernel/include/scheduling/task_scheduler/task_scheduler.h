@@ -60,12 +60,22 @@ struct fd_t{
     vnode_t* node;
     int flags;
     int num;
-    task_t* owner;
-
     size_t offset;
 
 
     fd_t* next;
+};
+
+struct fd_list{
+    int ref_cnt = 1;
+    spinlock_t spinlock = 0;
+    uint64_t rflags;
+
+    vnode_t *cwd = nullptr;
+    fd_t *file_descriptors = nullptr;
+
+    void lock();
+    void unlock();
 };
 
 
@@ -144,14 +154,25 @@ struct task_t{
     kernel_sigset_t pending_signals;
     kernel_sigset_t kernel_signals; // To identify which signals are sent by the kernel (for si_code)
     kernel_sigset_t signal_mask;
+    kernel_sigset_t next_signal_mask;
     kernel_sigaction signal_actions[64];
+    kernel_sigset_t saved_signal_mask;
+
+    uint32_t alarm;
+    uint64_t prev_alarm;
+    bool reocurring_alarm;
+
+    uint64_t itimer_next_expiration; 
+    uint64_t itimer_interval;
 
     uint32_t* clear_child_tid;
 
     bool signal_parent_on_exit;
     
+    int priority;
     int counter;
 
+    uint64_t quantum_start;
     uint64_t cpu_time; // Utilization
 
     uint64_t affinity; // A bitmap
@@ -196,12 +217,9 @@ struct task_t{
     vnode_t* proc_vfs_dir;
 
     // File Descriptors
-    fd_t* file_descriptors;
-    fd_t* cwd;
+    fd_list *file_list;
+    vnode_t *ctty;
     
-    spinlock_t file_descriptor_lock;
-
-
     /* TASK HELPERS */
     /*void* AllocatePage(bool COW = true); // Allocate and mark in vm_tracker
     void* AllocatePages(size_t amount, bool COW = true); // Allocate and mark in vm_tracker

@@ -9,4 +9,4 @@
 
 
 // It will print every device it finds on the pci bus during enumeration
-//#define LOG_PCI_DEVICE_ENUMERATION
+// #define LOG_PCI_DEVICE_ENUMERATION

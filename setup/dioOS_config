@@ -12,8 +12,68 @@ endchoice
 
 config HTOP
     bool "HTOP"
-    default y
+    help
+        Don't even bother, it does not run
 
 config BASH
     bool "BASH"
     default y
+
+config SUDO
+    bool "sudo"
+    default y
+    help
+        Well... its sudo...
+
+config VIM
+    bool "vim"
+    default y
+    help
+        Vim is a greatly improved version of the good old UNIX editor Vi.
+
+config X11
+    bool "X Graphical System"
+    default y
+    help
+        Build the X11 libraries and Xorg server. (aka the Graphical Interface)
+
+config XTERM
+    bool "Xterm"
+    default y
+    depends on X11
+    help
+        Trust me, you will need it.
+
+config LEAFPAD
+    bool "Leafpad"
+    default y
+    depends on X11
+    help
+        Leafpad is a simple GTK+ text editor that emphasizes simplicity.
+        As development focuses on keeping weight down to a minimum, only the most essential features are
+        implemented in the editor.Leafpad is simple to use, is easily compiled, requires few libraries, and starts up quickly. 
+
+config PCMANFM
+    bool "PcManFM"
+    default y
+    depends on X11
+    help
+        A classic file manager.
+
+choice
+    prompt "Window Manager"
+    default ICEWM
+    depends on X11
+
+    config ICEWM
+    bool "IceWM"
+    help
+        IceWM is a simple window manager that resembles windows 9x, has a start menu... and umm... its a window manager.
+        It does run quite slower (At least moving/resizing) compared to twm
+
+    config TWM
+    bool "twm"
+    help
+        TWM is as simple as it gets. Its a window manager, runs very fast but it is very minimalistic.
+        You will need a terminal.
+endchoice

@@ -6,7 +6,12 @@
 #include <cstr.h>
 #include <CONFIG.h>
 #include <drivers/drivers.h>
+#include <interrupts/interrupts.h>
+#include <scheduling/apic/ioapic.h>
+#include <acpi.h>
+#include <local.h>
 
+void init_pci_interrupt_routing();
 
 namespace pci{
     pci_device_t* pci_device_descriptor_list = nullptr;
@@ -122,6 +127,7 @@ namespace pci{
 
     void create_pci_vfs_entries();
 
+
     void enumerate_pci(){
         ACPI_TABLE_HEADER *mcfg = NULL;
         ACPI_STATUS status = AcpiGetTable(ACPI_MCFG_SIG, 1, &mcfg);
@@ -142,6 +148,7 @@ namespace pci{
         }
 
         //create_pci_vfs_entries();
+        init_pci_interrupt_routing();
     }
 
     void create_pci_vfs_entries(){
@@ -253,8 +260,97 @@ namespace pci{
         for (uint32_t i = 0; i < bar_size; i += 0x1000){
             globalPTM.MapMemory((void*)(virtual_address + i), (void*)(physical_address + i));
             globalPTM.SetFlag((void*)(virtual_address + i), PT_Flag::CacheDisable, true);
+            globalPTM.SetFlag((void*)(virtual_address + i), PT_Flag::WriteThrough, true);
         }
 
         return virtual_address;
     }
+
+    void register_isr(void (handler)(void*), void *cb){
+        _add_dynamic_isr(PCI_INT_VECTOR, handler, cb);
+    }
+}
+
+
+/* ACPI _PRT */
+bool routed_gsis[256] = { false }; 
+
+uint32_t resolve_link_device(ACPI_HANDLE parent_bus_handle, char* source_name) {
+    ACPI_HANDLE link_handle;
+    if (ACPI_FAILURE(AcpiGetHandle(parent_bus_handle, source_name, &link_handle))) return 0;
+
+    ACPI_BUFFER res_buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+    
+    ACPI_STATUS status = AcpiGetCurrentResources(link_handle, &res_buffer);
+    uint32_t gsi = 0;
+
+    auto parse_gsi = [&](ACPI_BUFFER& buf) -> uint32_t {
+        uint8_t* ptr = (uint8_t*)buf.Pointer;
+        while (ptr) {
+            ACPI_RESOURCE* res = (ACPI_RESOURCE*)ptr;
+            if (res->Type == ACPI_RESOURCE_TYPE_IRQ) return res->Data.Irq.Interrupts[0];
+            if (res->Type == ACPI_RESOURCE_TYPE_EXTENDED_IRQ) return res->Data.ExtendedIrq.Interrupts[0];
+            if (res->Type == ACPI_RESOURCE_TYPE_END_TAG) break;
+            ptr += res->Length;
+        }
+        return 0;
+    };
+
+    if (ACPI_SUCCESS(status)) {
+        gsi = parse_gsi(res_buffer);
+        AcpiOsFree(res_buffer.Pointer);
+    }
+
+    if (gsi == 0) {
+        res_buffer.Pointer = NULL;
+        res_buffer.Length = ACPI_ALLOCATE_BUFFER;
+        if (ACPI_SUCCESS(AcpiGetPossibleResources(link_handle, &res_buffer))) {
+            gsi = parse_gsi(res_buffer);
+            
+            AcpiOsFree(res_buffer.Pointer);
+        }
+    }
+
+    return gsi;
+}
+
+extern "C" void* isr_stub_table_ptrs[256];
+
+ACPI_STATUS harvest_gsis(ACPI_HANDLE object, UINT32 nesting_level, void *context, void **return_value) {
+    ACPI_BUFFER buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+    
+    // Evaluate _PRT on this object
+    if (ACPI_SUCCESS(AcpiGetIrqRoutingTable(object, &buffer))) {
+        ACPI_PCI_ROUTING_TABLE* prt = (ACPI_PCI_ROUTING_TABLE*)buffer.Pointer;
+
+        while (prt->Length) {
+            uint32_t gsi = 0;
+
+            if (prt->Source[0] == '\0') {
+                // Direct GSI
+                gsi = prt->SourceIndex;
+            } else {
+                // Link Object (LNKA, etc.)
+                gsi = resolve_link_device(object, prt->Source);
+            }
+
+            if (gsi > 0 && gsi < 256 && !routed_gsis[gsi]) {
+                set_apic_irq(gsi, PCI_INT_VECTOR, false);
+                routed_gsis[gsi] = true;
+            }
+
+            prt = (ACPI_PCI_ROUTING_TABLE*)((uint8_t*)prt + prt->Length);
+        }
+        AcpiOsFree(buffer.Pointer);
+    }
+    return AE_OK;
+}
+
+void init_pci_interrupt_routing() {
+    _set_bsp_interrupt_service_routine(isr_stub_table_ptrs[PCI_INT_VECTOR], PCI_INT_VECTOR, IDT_TA_InterruptGate, 0x08);
+    AcpiWalkNamespace(ACPI_TYPE_DEVICE, 
+                      ACPI_ROOT_OBJECT, 
+                      UINT32_MAX, 
+                      harvest_gsis, 
+                      NULL, NULL, NULL);
 }

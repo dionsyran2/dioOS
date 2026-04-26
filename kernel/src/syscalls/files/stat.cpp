@@ -67,7 +67,7 @@ long sys_stat_internal(vnode_t* node, struct stat* statbuf, bool lnk){
     statbuf->st_nlink = 1;
     statbuf->st_uid = node->uid;
     statbuf->st_gid = node->gid;
-    statbuf->st_rdev = 1;
+    statbuf->st_rdev = node->dev_id;
     statbuf->st_size = node->size;
 
     // Size and blocks for regular files and block devices

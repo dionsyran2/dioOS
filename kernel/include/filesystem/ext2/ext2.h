@@ -81,6 +81,7 @@ namespace filesystems{
         void _free_single_indirect(uint64_t single_indirect_block);
         
         public:
+        int dev_id;
         
         private:
 

@@ -5,6 +5,7 @@
 #include <kstdio.h>
 #include <panic.h>
 #include <memory.h>
+#include <scheduling/apic/lapic.h>
 
 struct stack_frame_t {
     struct stack_frame_t* rbp;
@@ -130,6 +131,7 @@ void PageFault(isr_exception_info_t* info){
     }
 
 continue_pf_exception:
+    send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
     PageTableManager* ptm = &globalPTM;
     if (self && self->ptm) ptm = self->ptm;
 
@@ -163,12 +165,14 @@ continue_pf_exception:
 }
 
 void DoubleFault(isr_exception_info_t* info){
+    send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
     log_registers(false, info);
 
     panic("Double fault!");
 }
 
 void GeneralProtection(isr_exception_info_t* info){
+    send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
     log_registers(false, info);
     task_t *self = task_scheduler::get_current_task();
 
@@ -178,6 +182,7 @@ void GeneralProtection(isr_exception_info_t* info){
 }
 
 void DivisionError(isr_exception_info_t* info){
+    send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
     log_registers(false, info);
 
     stack_frame_t* stack = (stack_frame_t*)info->rbp;
@@ -187,6 +192,7 @@ void DivisionError(isr_exception_info_t* info){
 }
 
 void InvalidOpcode(isr_exception_info_t* info){
+    send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
     log_registers(false, info);
 
     stack_frame_t* stack = (stack_frame_t*)info->rbp;
@@ -195,6 +201,7 @@ void InvalidOpcode(isr_exception_info_t* info){
 }
 
 void Debug(isr_exception_info_t* info){
+    send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
     log_registers(false, info);
 
     stack_frame_t* stack = (stack_frame_t*)info->rbp;

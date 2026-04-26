@@ -68,6 +68,8 @@ inline static uint16_t translate_e0(uint8_t scancode) {
 }
 
 namespace ps2_kb{
+    extern bool kbd_ready;
+
     void set_lights(bool caps, bool scroll, bool num);
     void init_kb(uint8_t ident);
 }

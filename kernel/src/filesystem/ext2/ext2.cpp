@@ -11,8 +11,6 @@ void ext2_on_mount(vnode_t* this_node){
     fs->mount();
 }
 
-// TO-DO: int (*unlink)(vnode_t* this_node);
-// TO-DO: int (*rmdir)(vnode_t* this_node);
 extern vnode_ops_t ext2_dir_ops;
 extern vnode_ops_t ext2_file_ops;
 
@@ -76,6 +74,7 @@ int ext2_vnode_find_file(const char *filename, vnode_t** out, vnode_t* this_node
 
                     vnode->fs_identifier = this_node->fs_identifier;
                     vnode->inode = entry->inode;
+                    vnode->dev_id = fs->dev_id;
                     vnode->size = fs->get_inode_size(inode);
                     
                     vnode->permissions = inode->type_permissions & 0xFFF;
@@ -161,6 +160,7 @@ int ext2_vnode_read_dir(vnode_t** out, vnode_t* this_node){
 
                     vnode->fs_identifier = this_node->fs_identifier;
                     vnode->inode = entry->inode;
+                    vnode->dev_id = fs->dev_id;
                     vnode->size = fs->get_inode_size(inode);
                     
                     vnode->permissions = inode->type_permissions & 0xFFF;
@@ -230,6 +230,8 @@ namespace filesystems{
         this->superblock = new ext2_superblock_t;
         this->extended_superblock = new ext2_extended_superblock_t;
         block_group_table = nullptr; // To be allocated
+
+        this->dev_id = filesystems::acquire_dev_id();
     }
 
     ext2_t::~ext2_t(){
@@ -360,7 +362,7 @@ namespace filesystems{
 
         this->root->fs_identifier = (uint64_t)this;
         this->root->inode = EXT2_ROOT_INODE;
-        
+        this->root->dev_id = this->dev_id;
         return this->root;
     }
 

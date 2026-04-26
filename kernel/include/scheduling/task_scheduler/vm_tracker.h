@@ -23,6 +23,11 @@ struct vm_struct {
     uint16_t flags;
 };
 
+namespace kstd {
+    template <typename T>
+    class avl_tree_t;
+}
+
 struct PageTableManager;
 
 class vm_tracker_t{ // Virtual memory manager

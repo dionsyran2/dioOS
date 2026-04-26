@@ -130,6 +130,8 @@ int sys_epoll_wait(int epfd, struct epoll_event *events, int maxevents, int time
     if (!kernel_events) return -ENOMEM;
 
     while (true) {
+        asm volatile("" : : : "memory");
+
         int events_found = 0;
 
         for (watched_fd_t *curr = instance->watch_list; curr != nullptr; curr = curr->next) {
@@ -138,8 +140,7 @@ int sys_epoll_wait(int epfd, struct epoll_event *events, int maxevents, int time
             fd_t *fd = self->get_fd(curr->fd);
             if (!fd) continue; 
 
-            serialf("checking %s %d\n", fd->node->name, fd->node->data_ready_to_read);
-            bool has_data = fd->node->data_ready_to_read; 
+            bool has_data = fd->node->pollout(); 
 
             if (has_data && (curr->events & EPOLLIN)) {
                 kernel_events[events_found].events = EPOLLIN;
@@ -161,8 +162,7 @@ int sys_epoll_wait(int epfd, struct epoll_event *events, int maxevents, int time
             return 0;
         }
 
-        // Sleep for 10ms (or 1ms) and try again. This creates the "Polling" effect.
-        self->ScheduleFor(10, BLOCKED); 
+        self->ScheduleFor(20, BLOCKED, WAITING_ON_EVENT); 
 
         // If a signal (like SIGKILL) arrived while sleeping, abort.
         if (self->signal_count == 0 && self->woke_by_signal) {
@@ -172,7 +172,7 @@ int sys_epoll_wait(int epfd, struct epoll_event *events, int maxevents, int time
         
         // If timeout > 0, decrement it so we don't block forever
         if (timeout > 0) {
-            timeout -= 10;
+            timeout -= 5;
             if (timeout <= 0) {
                 free(kernel_events);
                 return 0;
@@ -181,4 +181,4 @@ int sys_epoll_wait(int epfd, struct epoll_event *events, int maxevents, int time
     }
 }
 REGISTER_SYSCALL(232, sys_epoll_wait);
-REGISTER_SYSCALL(281, sys_epoll_wait); // Xorg sometimes uses pwait
+REGISTER_SYSCALL(281, sys_epoll_wait);

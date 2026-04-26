@@ -208,6 +208,9 @@ int fat32_vnode_find_file(const char *filename, vnode_t **out, vnode_t *this_nod
         node->io_block_size = this_node->io_block_size;
         
         node->fs_identifier = (uint64_t)fs;
+        node->dev_id = fs->dev_id;
+        node->inode = 0; /* TODO */
+        node->do_not_cache = true;
 
         fat32_vnode_info_t* file_info = new fat32_vnode_info_t;
         file_info->parent_start_cluster = cluster;
@@ -270,11 +273,12 @@ int fat32_vnode_read_dir(vnode_t** out, vnode_t* this_node){
     vnode_t* node_chain = nullptr;
     vnode_t* last_node = nullptr;
     int node_count = 0;
-
+    int entry_offset = 0;
     for (fat_directory_entry_t* entry = entry_table; entry->name[0] != 0; ) {        
         if ((unsigned char)entry->name[0] == 0xE5) {
             lfn_found = false;
             entry++;
+            entry_offset++;
             continue;
         }
 
@@ -301,7 +305,10 @@ int fat32_vnode_read_dir(vnode_t** out, vnode_t* this_node){
 
         node->permissions = 0777; // FAT32 has no permission support, let alone unix permissions.
         node->io_block_size = this_node->io_block_size;
-        
+        node->dev_id = fs->dev_id;
+        node->inode = 0 /* TODO */;
+        node->do_not_cache = true;
+
         node->fs_identifier = (uint64_t)fs;
 
         fat32_vnode_info_t* file_info = new fat32_vnode_info_t;
@@ -336,6 +343,7 @@ int fat32_vnode_read_dir(vnode_t** out, vnode_t* this_node){
 
         lfn_found = false;
         entry++;
+        entry_offset++;
     }
 
     free(entry_table);
@@ -364,6 +372,7 @@ namespace filesystems {
         memset(this, 0, sizeof(fat32_t));
 
         this->blk = blk;
+        this->dev_id = filesystems::acquire_dev_id();
 
         // Load the FAT32 Structures
         _load_bpb();
@@ -1043,7 +1052,8 @@ namespace filesystems {
         node->io_block_size = this->bios_parameter_block.bytes_per_sector;
         
         node->fs_identifier = (uint64_t)this;
-
+        node->dev_id = this->dev_id;
+        node->inode = 0;
         node->file_identifier = 0;
         node->partition_total_size = blk->size;
         node->size = 0;

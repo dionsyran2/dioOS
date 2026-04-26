@@ -5,9 +5,9 @@ BOOTDIR := $(OSDIR)/bootloader
 KERNELDIR := $(OSDIR)/kernel
 BUILDDIR := $(KERNELDIR)/bin
 SETUPDIR := $(OSDIR)/setup
-DISKDIR := $(OSDIR)/disk
+DISKDIR := $(OSDIR)/disk/
 TMPDIR := $(OSDIR)/setup/tmp
-DISK_SIZE_MB=2048
+DISK_SIZE_MB=4096
 ESP_SIZE_MB=64
 
 
@@ -63,7 +63,7 @@ buildimg:
 	[ -f $(KERNEL_FONT_FILE) ] && sudo cp $(KERNEL_FONT_FILE) mnt/esp/ || echo "Missing kernel font file!"; \
 	\
 	printf "\e[1;33mInstalling OS files...\e[0m\n"; \
-	[ -d $(DISKDIR) ] && sudo cp -r $(DISKDIR)/* mnt/ext2/ || echo "Missing $(DISKDIR)"; \
+	[ -d $(DISKDIR) ] && sudo cp -a $(DISKDIR)/* mnt/ext2/ || echo "Missing $(DISKDIR)"; \
 	\
 	printf "\e[1;33mSync and cleanup...\e[0m\n"; \
 	sync; \
@@ -74,7 +74,7 @@ buildimg:
 
 	@printf "\e[1;33mConverting image to .vmdk\e[0m\n"
 	@qemu-img convert -f raw -O vmdk $(DISK) $(OSDIR)/$(OSNAME).vmdk
-	@parted $(DISK) print
+#	@parted $(DISK) print
 
 
 clean:
@@ -89,14 +89,12 @@ run:
 	qemu-system-x86_64 \
 	-machine q35 \
 	-m 4G \
-	-smp cores=1 \
+	-smp cores=2 \
 	-cpu max \
 	-drive file=$(DISK) \
-	-drive if=pflash,format=raw,unit=0,file="/OVMFbin/OVMF_CODE-pure-efi.fd",readonly=on \
-	-drive if=pflash,format=raw,unit=1,file="/OVMFbin/OVMF_VARS-pure-efi.fd" \
+	-drive if=pflash,format=raw,unit=0,file="/usr/share/ovmf/OVMF_CODE-pure-efi.fd",readonly=on \
+	-drive if=pflash,format=raw,unit=1,file="/usr/share/ovmf/OVMF_VARS-pure-efi.fd" \
 	-device intel-hda,debug=0 \
-	-device hda-output,audiodev=snd0 \
-	-audiodev dsound,id=snd0 \
 	-device qemu-xhci,id=xhci \
 	-nic user,model=e1000e \
 	-monitor stdio \

@@ -13,4 +13,5 @@ namespace TSC{
     uint64_t get_ticks();
     uint64_t get_time_ns();
     uint64_t get_ticks_per_ns();
+    uint64_t get_uptime_ns();
 }

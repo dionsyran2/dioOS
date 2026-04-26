@@ -10,7 +10,8 @@
 #include <math.h>
 #include <syscalls/files/ioctl.h>
 #include <drivers/timers/common.h>
-
+#include <evcodes.h>
+#include <signum.h>
 void dump_all_tasks() {
     serialf("--- SCHEDULER TASK DUMP ---\n");
     for (task_t* t = task_scheduler::task_list; t != nullptr; t = t->next) {
@@ -21,7 +22,7 @@ void dump_all_tasks() {
 int vt_read(uint64_t offset, uint64_t length, void* buffer, vnode_t* this_node){
     virtual_terminal *vt = (virtual_terminal*)this_node->fs_identifier;
 
-    while(!this_node->data_ready_to_read || vt->output_buffer_size == 0)
+    while(!this_node->pollout() || vt->output_buffer_size == 0)
         task_scheduler::get_current_task()->ScheduleFor(10, BLOCKED);
 
     uint64_t rflags = spin_lock(&vt->input_lock);
@@ -201,7 +202,7 @@ int vt_ioctl(int op, char* argp, vnode_t* this_node){
             int pgid;
             self->read_memory(argp, &pgid, sizeof(int));
             //memset(&tty->term, 0, sizeof(termios));
-            //vt->foreground_group_id = pgid;
+            vt->foreground_pgrp = pgid;
 
             vt->settings.c_cflag |= (CS8 | CREAD | CLOCAL);
             vt->settings.c_lflag |= (ICANON | ECHO | ECHOE | ISIG);
@@ -314,30 +315,65 @@ char virtual_terminal::vt_process_event(struct input_event *ev) {
 
 void vt_input_task(virtual_terminal* vt){
     task_t* self = task_scheduler::get_current_task();
-    vnode_t* tst = vfs::resolve_path("/dev/input/event0");
+    int evnum = 0;
+
+    vnode_t *evt = nullptr;
+
+    while (!ps2_kb::kbd_ready){
+        self->ScheduleFor(500, BLOCKED);
+    }
+
+    while (true){
+        char pathname[128];
+        stringf(pathname, sizeof(pathname), "/dev/input/event%d", evnum);
+
+        evt = vfs::resolve_path(pathname);
+        if (!evt) break;
+
+        // Check if its a keyboard
+        input_id id;
+        evt->ioctl(EVIOCGID, (char *)&id);
+        if (id.vendor == 1 && id.product == 1) break; // Keyboard!
+
+        evt->close();
+    }
 
     input_event t;
 
     while(1){
-        if (!tst) {
+        if (!evt) {
             self->exit(-1);
         }
 
-        tst->read(0, sizeof(t), &t);
+        while (evt->exclusive_flag){
+            vt->disable_cursor = true;
+            vt->disable_tty = true;
+            self->ScheduleFor(2500, BLOCKED);
+        }
+
+        vt->disable_tty = false;
+
+        /*while (!evt->pollout()){
+            self->ScheduleFor(20, BLOCKED);
+        }*/
         
+        if (evt->exclusive_flag) continue;
+
+        evt->read(0, sizeof(t), &t);
         char c = vt->vt_process_event(&t);
+
 
         const char* seq = nullptr;
         
         if (t.value >= 1) { 
             switch (t.code) {
                 // --- Cursor Movement ---
-                case KEY_UP:    seq = "\e[A"; break;
-                case KEY_DOWN:  seq = "\e[B"; break;
-                case KEY_RIGHT: seq = "\e[C"; break;
-                case KEY_LEFT:  seq = "\e[D"; break;
-                case KEY_HOME:  seq = "\e[H"; break;
-                case KEY_END:   seq = "\e[F"; break;
+                case KEY_UP:    seq = "\e[A"; vt->draw_cursor(); break;
+                case KEY_DOWN:  seq = "\e[B"; vt->draw_cursor(); break;
+                case KEY_RIGHT: seq = "\e[C"; vt->draw_cursor(); break;
+                case KEY_LEFT:  seq = "\e[D"; vt->draw_cursor(); break;
+                case KEY_HOME:  seq = "\e[H"; vt->draw_cursor(); break;
+                case KEY_END:   seq = "\e[F"; vt->draw_cursor(); break;
 
                 case KEY_F1:    seq = "\eOP"; break;
                 case KEY_F2:    seq = "\eOQ"; break;
@@ -376,7 +412,32 @@ void vt_input_task(virtual_terminal* vt){
             vt->node->data_ready_to_read = true;
             spin_unlock(&vt->input_lock, rflags);
             continue;
-        } 
+        }
+
+
+        if ((vt->settings.c_lflag & ISIG) == ISIG) {
+            if (c == '\x03') { // Ctrl+C
+                // Visually echo the ^C to the screen if ECHO is on
+                if ((vt->settings.c_lflag & ECHO) == ECHO) {
+                    vt->write('^');
+                    vt->write('C');
+                }
+
+                if (vt->foreground_pgrp > 0) {
+                    task_t *fg_task = task_scheduler::get_process(vt->foreground_pgrp);
+                    if (fg_task) {
+                        fg_task->pending_signals |= (1ULL << (SIGINT - 1));
+                        
+                        if (fg_task->task_state == BLOCKED) {
+                            fg_task->woke_by_signal = true;
+                            fg_task->task_state = PAUSED;
+                        }
+                    }
+                }
+                spin_unlock(&vt->input_lock, rflags);
+                continue; // Do NOT push '\x03' into the input_buffer
+            }
+        }
         
         if (c == '\b' && (vt->settings.c_lflag & ICANON) == ICANON) {
             if (vt->input_data_size != 0) {
@@ -393,6 +454,11 @@ void vt_input_task(virtual_terminal* vt){
         }
         
         if ((c >= ' ' || c == '\b' || c == '\n') && (vt->settings.c_lflag & ECHO) == ECHO) {
+            if (c == '\b' && (vt->settings.c_lflag & ECHOE) == ECHOE){ // ECHO-Erase
+                vt->write('\b');
+                vt->write(' ');
+            }
+
             vt->write(c);
         }
         
@@ -400,10 +466,48 @@ void vt_input_task(virtual_terminal* vt){
     }
 }
 
+void virtual_terminal::draw_cursor(bool clear){
+    if (clear){
+        this->cursor_state = false;
+        vt_cell* cursor_cell = &this->cell_table[this->cursor_y * this->width + this->cursor_x];
+        if (cursor_cell->bg == 0xFFFFFFFF && cursor_cell->fg == 0 && cursor_cell->chr == ' '){
+            //this->cursor_prev_cell_state.chr = 0;
+            this->set_cell(
+                this->cursor_x, this->cursor_y, this->cursor_prev_cell_state.chr == 0 ? ' ' : this->cursor_prev_cell_state.chr, 
+                this->cursor_prev_cell_state.attributes, this->cursor_prev_cell_state.fg, 
+                this->cursor_prev_cell_state.bg
+            );
+            this->print_cell(this->cursor_x, this->cursor_y);  
+        }
+    } else {
+        if (this->cursor_state){
+            draw_cursor(true);
+        }
+
+        if (this->disable_cursor) return;
+
+        this->cursor_state = true;
+        vt_cell* cell = &this->cell_table[this->offset_y * this->width + this->offset_x];
+        this->cursor_y = this->offset_y;
+        this->cursor_x = this->offset_x;
+        
+        this->cursor_prev_cell_state.chr = cell->chr;
+        this->cursor_prev_cell_state.attributes = cell->attributes;
+        this->cursor_prev_cell_state.fg = cell->fg; 
+        this->cursor_prev_cell_state.bg = cell->bg;
+
+        cell->bg = 0xFFFFFFFF;
+        cell->fg = 0;
+        cell->chr = ' ';
+        this->print_cell(this->cursor_x, this->cursor_y);
+    }
+
+    this->update_screen();
+}
+
 void vt_output_task(virtual_terminal* vt){
     task_t* self = task_scheduler::get_current_task();
     bool cursor_state = false;
-    bool needs_render = false;
 
     uint64_t last_cursor_update_time = GetTicks();
 
@@ -414,7 +518,6 @@ void vt_output_task(virtual_terminal* vt){
             vt->write(vt->output_buffer, vt->output_data_size);
             vt->output_data_size = 0;
 
-            needs_render = true;
         }
 
 
@@ -425,43 +528,16 @@ void vt_output_task(virtual_terminal* vt){
                 // Revert the cell to its previous state
                 cursor_state = false;
 
-                vt_cell* cursor_cell = &vt->cell_table[vt->cursor_y * vt->width + vt->cursor_x];
-                if (cursor_cell->bg == 0xFFFFFFFF && cursor_cell->fg == 0 && cursor_cell->chr == ' '){
-                    //vt->cursor_prev_cell_state.chr = 0;
-                    vt->set_cell(
-                        vt->cursor_x, vt->cursor_y, vt->cursor_prev_cell_state.chr == 0 ? ' ' : vt->cursor_prev_cell_state.chr, 
-                        vt->cursor_prev_cell_state.attributes, vt->cursor_prev_cell_state.fg, 
-                        vt->cursor_prev_cell_state.bg
-                    );
-                    vt->print_cell(vt->cursor_x, vt->cursor_y);
-                    needs_render = true;
-                }
+                vt->draw_cursor(true);
             } else if (!vt->disable_cursor) {
                 // Draw the cursor
                 cursor_state = true;
 
-                vt_cell* cell = &vt->cell_table[vt->offset_y * vt->width + vt->offset_x];
-                vt->cursor_y = vt->offset_y;
-                vt->cursor_x = vt->offset_x;
-                
-                vt->cursor_prev_cell_state.chr = cell->chr;
-                vt->cursor_prev_cell_state.attributes = cell->attributes;
-                vt->cursor_prev_cell_state.fg = cell->fg; 
-                vt->cursor_prev_cell_state.bg = cell->bg;
-
-                cell->bg = 0xFFFFFFFF;
-                cell->fg = 0;
-                cell->chr = ' ';
-                vt->print_cell(vt->cursor_x, vt->cursor_y);
-                needs_render = true;
+                vt->draw_cursor(false);
             }
         }
 
-        if (needs_render && vt->driver) {
-            needs_render = false;
-            vt->update_screen();
-        }
-        
+
         spin_unlock(&vt->output_lock, rflags);
 
         self->ScheduleFor(16, BLOCKED);
@@ -641,6 +717,10 @@ void virtual_terminal::scroll(){
 }
 
 void virtual_terminal::write(const char* str, uint32_t length) {
+    if (this->disable_tty) return;
+    
+    this->draw_cursor(true);
+    
     for (uint32_t i = 0; i < length; i++) {
         char c = str[i];
 
@@ -678,6 +758,7 @@ void virtual_terminal::write(const char* str, uint32_t length) {
                     offset_x = saved_offset[0];
                     offset_y = saved_offset[1];
                     state = VT_STATE_NORMAL;
+                    this->draw_cursor();
                 } else {
                     // Unknown ESC sequence, fall back to normal
                     state = VT_STATE_NORMAL;
@@ -717,6 +798,8 @@ void virtual_terminal::write(const char* str, uint32_t length) {
                 break;
         }
     }
+
+    this->draw_cursor();
 }
 
 void virtual_terminal::write(wchar_t chr){
@@ -729,10 +812,6 @@ void virtual_terminal::write(wchar_t chr){
         case '\b':
             if (offset_x > 0){
                 offset_x--;
-                if ((this->settings.c_lflag & ECHOE) == ECHOE){ // ECHO-Erase
-                    set_cell(offset_x, offset_y, ' ', current_attributes,current_fg, current_bg);
-                    print_cell(offset_x, offset_y);
-                }
             }
             return;
 
@@ -786,6 +865,21 @@ void virtual_terminal::write(wchar_t chr){
     if (offset_y >= height){
         scroll();
         offset_y = height - 1;
+    }
+
+    if (this->insert_mode) {
+        int remaining = width - offset_x - 1;
+        if (remaining > 0) {
+            memmove(&cell_table[offset_y * width + offset_x + 1],
+                    &cell_table[offset_y * width + offset_x],
+                    remaining * sizeof(vt_cell));
+
+            for (int x = offset_x + 1; x < width; x++) {
+                print_cell(x, offset_y);
+            }
+        }
+
+        mark_dirty(0, offset_y * VT_CELL_HEIGHT, width * VT_CELL_WIDTH, VT_CELL_HEIGHT);
     }
 
     // Otherwise print the character
@@ -848,15 +942,19 @@ void virtual_terminal::handle_csi_command(char command) {
     switch (command) {
         case 'A': // Cursor Up
             offset_y = max(0, (int)offset_y - arg0);
+            draw_cursor();
             break;
         case 'B': // Cursor Down
             offset_y = min((int)height - 1, (int)offset_y + arg0);
+            draw_cursor();
             break;
         case 'C': // Cursor Forward
             offset_x = min((int)width - 1, (int)offset_x + arg0);
+            draw_cursor();
             break;
         case 'D': // Cursor Back
             offset_x = max(0, (int)offset_x - arg0);
+            draw_cursor();
             break;
         case 'H': // Cursor Position
         case 'f':
@@ -881,6 +979,57 @@ void virtual_terminal::handle_csi_command(char command) {
             } else {
                 handle_sgr(csi_params, csi_param_count);
             }
+            break;
+
+        case '@': { // ICH - Insert Character(s)
+            int num = arg0;
+            int remaining = width - offset_x - num;
+            if (remaining > 0) {
+                // Shift the rest of the line to the right
+                memmove(&cell_table[offset_y * width + offset_x + num],
+                        &cell_table[offset_y * width + offset_x],
+                        remaining * sizeof(vt_cell));
+            }
+            // Clear the newly opened space
+            for (int i = 0; i < num && (offset_x + i) < width; i++) {
+                set_cell(offset_x + i, offset_y, ' ', current_attributes, current_fg, current_bg);
+            }
+
+
+            for (int x = offset_x; x < width; x++) {
+                print_cell(x, offset_y);
+            }
+
+            // Redraw the whole line
+            mark_dirty(0, offset_y * VT_CELL_HEIGHT, width * VT_CELL_WIDTH, VT_CELL_HEIGHT);
+            break;
+        }
+        case 'P': { // DCH - Delete Character(s)
+            int num = arg0;
+            int remaining = width - offset_x - num;
+            if (remaining > 0) {
+                // Shift the rest of the line left (pulling it backwards)
+                memmove(&cell_table[offset_y * width + offset_x],
+                        &cell_table[offset_y * width + offset_x + num],
+                        remaining * sizeof(vt_cell));
+            }
+
+            for (int i = 0; i < num && (width - 1 - i) >= offset_x; i++) {
+                set_cell(width - 1 - i, offset_y, ' ', current_attributes, current_fg, current_bg);
+            }
+
+            for (int x = offset_x; x < width; x++) {
+                print_cell(x, offset_y);
+            }
+
+            mark_dirty(0, offset_y * VT_CELL_HEIGHT, width * VT_CELL_WIDTH, VT_CELL_HEIGHT);
+            break;
+        }
+        case 'h': // Set Mode (Standard)
+            if (!private_mode && arg0 == 4) this->insert_mode = true;
+            break;
+        case 'l': // Reset Mode (Standard)
+            if (!private_mode && arg0 == 4) this->insert_mode = false;
             break;
     }
 }

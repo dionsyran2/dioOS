@@ -43,7 +43,7 @@ long sys_wait4(int pid, int *wstatus, int options, struct rusage *rusage) {
         }
 
         spin_unlock(&task_scheduler::task_list_lock, rflags);
-        
+
         if (!found_any_child)
             return -ECHILD;
 

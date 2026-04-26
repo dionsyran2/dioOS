@@ -2,12 +2,16 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <scheduling/spinlock/spinlock.h>
+#include <filesystem/vfs/vfs_cache.h>
 
 #define FILE_PERMISSIONS_X 1
 #define FILE_PERMISSIONS_W 2
 #define FILE_PERMISSIONS_R 4
 
 struct vnode_t;
+namespace vfs{
+    class cache_t;
+}
 
 
 enum vnode_type_t{
@@ -54,6 +58,8 @@ struct vnode_ops_t{
     int (*open)(vnode_t* this_node);
     int (*close)(vnode_t* this_node);
 
+    int (*special_open)(vnode_t* this_node); // For special files like ptmx
+
     int (*ioctl)(int op, char* argp, vnode_t* this_node);
 
     // --- Called right before the vnode is deleted (cleanup memory) --- //
@@ -71,6 +77,10 @@ struct vnode_ops_t{
 
     // --- Other stuff --- //
     unsigned long (*mmap)(void *addr, size_t length, int prot, int flags, int fd, uint64_t offset, vnode_t* this_node);
+
+    // Smart polling
+    bool (*pollin)(vnode_t *this_node);
+    bool (*pollout)(vnode_t *this_node);
 };
 
 
@@ -112,6 +122,9 @@ struct vnode_t{
     vnode_t* mounted_on; // If this is the destination, where does it start?
 
     bool directory_cached;
+    bool do_not_cache;
+
+    bool exclusive_flag;
 
     // --- Locks --- //
     int lock_owner;
@@ -121,6 +134,7 @@ struct vnode_t{
     // --- Driver Specific Data --- //
     vnode_ops_t file_operations;
 
+    int dev_id;
     int inode;
     uint64_t fs_identifier; // An identifier (could be anything)
     uint64_t file_identifier; // An identifier for the file
@@ -189,9 +203,13 @@ struct vnode_t{
     void _cache_dir();
     void _uncache_dir(); // After the refcnt reaches 0, it is called (0 means also every child is closed)
     
+    
     void _add_child(vnode_t *child);
     void _remove_child(vnode_t *child, bool lock_held = false);
     int _increase_refcount();
     int _decrease_refcount();
     void _cleanup();
+
+    bool pollin();
+    bool pollout();
 };
