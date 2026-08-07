@@ -288,7 +288,7 @@ static void* memset_avx512(void* start, int value, size_t num) {
 // ============================================================================
 
 extern "C" void* memcpy(void* dest, const void* src, size_t n) {
-    if (is_avx512_enabled) {
+    /*if (is_avx512_enabled) {
         return memcpy_avx512(dest, src, n);
     }
     if (is_avx_enabled) {
@@ -296,7 +296,7 @@ extern "C" void* memcpy(void* dest, const void* src, size_t n) {
     }
     if (is_sse_enabled) {
         return memcpy_sse(dest, src, n);
-    }
+    }*/
     return memcpy_scalar(dest, src, n);
 }
 

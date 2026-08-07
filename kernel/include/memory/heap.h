@@ -2,6 +2,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <memory.h>
 #include <scheduling/spinlock/spinlock.h>
 
 
@@ -30,8 +31,17 @@ extern uint64_t heap_used;
 extern uint64_t heap_size;
 
 
-inline void* operator new(size_t size){return malloc(size);};
-inline void* operator new[](size_t size){return malloc(size);};
+inline void* operator new(size_t size) {
+    void* p = malloc(size);
+    if (p) memset(p, 0, size);
+    return p;
+}
+
+inline void* operator new[](size_t size) {
+    void* p = malloc(size);
+    if (p) memset(p, 0, size);
+    return p;
+}
 
 inline void operator delete(void* p){free(p);};
 inline void operator delete(void* p, long unsigned int){free(p);};

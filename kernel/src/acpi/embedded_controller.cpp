@@ -8,6 +8,7 @@ ACPI_HANDLE EC_DEV = nullptr;
 uint32_t EC_GPE = 0;
 
 /* Let ACPICA access the EC directly */
+
 ACPI_STATUS AcpiEcHandler(UINT32 Function, ACPI_PHYSICAL_ADDRESS Address, UINT32 BitWidth, UINT64 *Value, void *HandlerContext, void* RegionContext){
     if (Function == ACPI_WRITE){
         return AcpiOsWritePort(Address, (UINT64)Value, BitWidth);
@@ -79,8 +80,10 @@ UINT32 EcGpeHandler(ACPI_HANDLE GpeDevice, UINT32 GpeNumber, void *Context){
 
     return ACPI_INTERRUPT_HANDLED | ACPI_REENABLE_GPE;
 }
-
 /* Find / Enable the EC (Its not ACPICA's job to initialize and enable its gpes) */
+
+
+
 ACPI_STATUS acpi_setup_ec(){
     EC_DEV = nullptr;
 

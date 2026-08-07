@@ -8,7 +8,6 @@ __attribute__((used, section(".limine_requests")))
 volatile LIMINE_BASE_REVISION(3);
 
 
-extern "C" uint64_t local_krnl_stack_offset = offsetof(cpu_local_data, kernel_stack_top);
 extern "C" uint64_t local_user_stack_scratch_offset = offsetof(cpu_local_data, user_stack_scratch);
 
 /* KERNEL */
@@ -29,8 +28,6 @@ void main(){
     init_kernel();
 
     cpu_local_data* local = get_cpu_local_data();
-    task_scheduler::initialize_scheduler();
-
     local->disable_scheduling = false;
     while(1);
 }

@@ -7,19 +7,16 @@
 psf1_font_t* psf_font = nullptr;
 bool is_psf_renderer_initialized = false;
 
-void init_psf_renderer(limine_file* file){
+void init_psf_renderer(void *file, size_t file_size){
     // Allocate a buffer
-    void* buffer = malloc(file->size);
-    memcpy(buffer, file->address, file->size);
-
-    psf1_header_t* psf_hdr = (psf1_header_t*)buffer;
+    psf1_header_t* psf_hdr = (psf1_header_t*)file;
     
     if (is_psf_renderer_initialized || psf_hdr->magic[0] != PSF1_MAGIC0 || psf_hdr->magic[1] != PSF1_MAGIC1) return;
     is_psf_renderer_initialized = true;
     psf_font = new psf1_font_t;
     psf_font->psf1_header = psf_hdr;
-    psf_font->glyphBuffer = (char*)((uint64_t)buffer + sizeof(psf1_header_t));
-    psf_font->size = file->size;
+    psf_font->glyphBuffer = (char*)((uint64_t)file + sizeof(psf1_header_t));
+    psf_font->size = file_size;
 }
 
 // PSF1 Fonts have a unicode table

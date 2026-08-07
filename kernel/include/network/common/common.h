@@ -1,7 +1,6 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
-#include <filesystem/vfs/vfs.h>
 #include <network/ethernet/ethernet.h>
 #include <network/dhcp/dhcp.h>
 #include <network/arp/arp.h>
@@ -25,7 +24,7 @@ struct waiting_socket_t{
 
 namespace nic_common {
     extern kstd::linked_list_t<waiting_socket_t*> waiting_sockets;
-    uint64_t register_nic(vnode_t *node, uint8_t *mac);
+    //uint64_t register_nic(vnode_t *node, uint8_t *mac);
     void nic_handle_packet(uint64_t id, void *buffer, size_t size);
     void refresh_nic(bool connected, uint64_t id);
     void get_mac(uint64_t id, uint8_t *out);
@@ -70,3 +69,5 @@ inline uint32_t htonl(uint32_t v) {
 inline uint32_t ntohl(uint32_t v) {
     return ((v<<24)&0xff000000)|((v<<8)&0x00ff0000)|((v>>8)&0x0000ff00)|((v>>24)&0x000000ff);
 }
+
+void intitialize_localhost();

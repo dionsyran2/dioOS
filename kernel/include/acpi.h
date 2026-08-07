@@ -64,6 +64,8 @@ namespace ACPI{
     }__attribute__((packed));
 
     void* FindTable(SDTHeader* sdtHeader, char* signature);
+
+    void InitializeACPICA();
 }
 
 extern ACPI::RSDP2* rsdp;

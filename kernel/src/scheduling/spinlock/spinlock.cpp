@@ -2,24 +2,24 @@
 #include <cpu.h>
 
 uint64_t spin_lock(spinlock_t* lock) {
-    // Get the current flags
     uint64_t flags = get_cpu_flags();
-    
-    // We must do this before trying to acquire the lock to prevent
-    // an ISR on this core from trying to take the same lock.
     asm volatile ("cli"); 
 
-    while (1) {
-        int expected = 0;
+    int expected = 0;
 
-        if (__atomic_compare_exchange_n(lock, &expected, 1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
-            break;
+    while (1) {
+        if (__atomic_load_n(lock, __ATOMIC_RELAXED) == 0) {
+            
+            expected = 0; 
+            
+            if (__atomic_compare_exchange_n(lock, &expected, 1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+                break;
+            }
         }
         
         asm volatile ("pause");
     }
 
-    // Return the state so we know whether to re-enable them later
     return flags;
 }
 

@@ -8,6 +8,8 @@ bool is_pit_enabled = false;
 uint64_t current_time;
 uint64_t boot_time;
 
+uint64_t time_since_boot; // Its a counter in milliseconds!!!!
+
 void initialize_timers(){
     cpu_local_data* local = get_cpu_local_data();
 

@@ -21,7 +21,6 @@ make_gcc:
 		cd $(TMPDIR)/$(TARG_GCC_VERSION) && ./contrib/download_prerequisites; \
 	fi
 	
-	# GCC strictly requires a separate build directory
 	@mkdir -p $(TMPDIR)/build-gcc
 	
 	cd $(TMPDIR)/build-gcc && \
@@ -36,4 +35,6 @@ make_gcc:
 		--disable-werror
 
 	$(MAKE) -C $(TMPDIR)/build-gcc -j$(NPROC)
+
+	$(STRIP) $(TMPDIR)/build-gcc/gcc/cc1
 	$(MAKE) -C $(TMPDIR)/build-gcc DESTDIR=$(DISKDIR) install

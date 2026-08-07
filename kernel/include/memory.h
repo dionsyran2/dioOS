@@ -21,6 +21,7 @@
 
 // @brief Will align to y boundrary
 #define ALIGN(x, y) (((x) + (y - 1)) & ~(y - 1))   
+#define ALIGN_DOWN(x, y) ((x) & ~(y - 1))
 
 extern uint64_t MEMORY_BASE;
 #define MMIO_BASE (MEMORY_BASE + 0x200000000000)

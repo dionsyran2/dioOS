@@ -38,3 +38,19 @@ void add_driver_to_list(base_driver_t* drv);
 
 void start_drivers();
 void stop_drivers();
+void start_deviceless_drivers();
+
+/* DEVICE-LESS DRIVERS (Like localhost, anything that needs to run without an actual device backing it up) */
+typedef struct deviceless_driver_class {
+    const char* name;
+    void (*initialize)();
+} deviceless_driver_class;
+
+#define DEVICELESS_DRIVER_SECTION_NAME ".deviceless-drivers"
+#define DEFINE_DEVICELESS_DRIVER(name) \
+    deviceless_driver_class name __attribute__((section(DEVICELESS_DRIVER_SECTION_NAME))) \
+    __attribute__((aligned(8)))
+
+
+extern deviceless_driver_class __start_deviceless_drivers[];
+extern deviceless_driver_class __stop_deviceless_drivers[];

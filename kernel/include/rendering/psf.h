@@ -33,5 +33,5 @@ struct psf1_font_t{
 
 extern bool is_psf_renderer_initialized;
 
-void init_psf_renderer(limine_file* file);
+void init_psf_renderer(void *file, size_t file_size);
 void draw_char(unsigned int fg, unsigned int bg, wchar_t chr, unsigned int x_start, unsigned int y_start, bool bold, bool underline, drivers::GraphicsDriver* driver);

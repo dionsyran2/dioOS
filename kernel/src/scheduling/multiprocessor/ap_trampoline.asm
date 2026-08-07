@@ -115,9 +115,16 @@ jmp_ptr:
 
 [bits 64]
 long_mode:
+    ; Enable nx :)
+    mov ecx, 0xC0000080
+    rdmsr
+    or eax, 1 << 11
+    wrmsr
+    
     ; RDI is the first argument for C++ functions
     ; Move our data pointer (ESI) to RDI
-    mov edi, esi 
+    mov rdi, 0
+    mov edi, esi
     
     ; Load Stack
     mov rsp, [rdi + 8]  ; var_stack

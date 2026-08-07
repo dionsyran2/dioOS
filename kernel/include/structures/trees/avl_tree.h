@@ -235,6 +235,18 @@ namespace kstd {
             }
         }
 
+        void _inorder_recursive(avl_node_t<T> *node, void (*cb)(T)){
+            if (node->get_left_child()){
+                _inorder_recursive(node->get_left_child(), cb);
+            }
+
+            cb(node->data);
+
+            if (node->get_right_child()){
+                _inorder_recursive(node->get_right_child(), cb);
+            }
+        }
+
         public:
         void insert(uint64_t key, T data){
             if (this->search(key))
@@ -325,6 +337,11 @@ namespace kstd {
             spin_unlock(&this->tree_lock, rflags);
             return best_match ? best_match->data : nullptr;
         }
+
+        void inorder(void (*cb)(T)){
+            if (this->root) this->_inorder_recursive(this->root, cb);
+        }
+
 
         avl_tree_t(){
 

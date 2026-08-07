@@ -111,17 +111,17 @@ void AcpiOsExecuteTaskWrapper(ACPI_OSD_EXEC_CALLBACK Function, void *Context){
 }
 
 ACPI_STATUS AcpiOsExecute(ACPI_EXECUTE_TYPE Type, ACPI_OSD_EXEC_CALLBACK Function, void *Context){
-    task_t* task = task_scheduler::create_process("ACPICA Thread", (function)AcpiOsExecuteTaskWrapper, false, false);
+    task_t* task = task_scheduler::create_process("ACPICA Thread", (function)AcpiOsExecuteTaskWrapper, false);
     task->registers.rdi = (UINT64)Function;
     task->registers.rsi = (UINT64)Context;
-    task_scheduler::mark_ready(task);
+    task_scheduler::mark_as_ready(task);
     return AE_OK;
 }
 
 void AcpiOsSleep(UINT64 Milliseconds){
     task_t* task = task_scheduler::get_current_task();
     if (task){
-        task->ScheduleFor(Milliseconds, BLOCKED);
+        task->block(Milliseconds, nullptr);
     }else{
         Sleep(Milliseconds);
     }
@@ -134,11 +134,8 @@ void AcpiOsStall(UINT32 Microseconds){
 }
 
 ACPI_STATUS AcpiOsCreateMutex(ACPI_MUTEX *OutHandle){
-    mutex_t* mutex = new mutex_t;
-    mutex->count = 0;
-    mutex->spinlock = 0;
+    mutex_t* mutex = new mutex_t();
 
-    //kprintf("Create Mutex! %p\n", mutex);
     *OutHandle = mutex;
     return AE_OK;
 }
@@ -149,17 +146,13 @@ void AcpiOsDeleteMutex(void *Handle){
 
 ACPI_STATUS AcpiOsAcquireMutex(void *Handle, uint16_t Timeout){
     mutex_t* mutex = (mutex_t*)Handle;
-    mutex->spinlock = 0;
-    mutex->count = 0;
-    mutex->owner_pid = -1;
+
     if (!mutex->lock(Timeout == -1 ? (UINT64)-1 : Timeout)) return AE_TIME;
 
     return AE_OK;
 }
 
 void AcpiOsReleaseMutex(ACPI_MUTEX Handle){
-    //kprintf("Release Mutex! %p\n", Handle);
-
     mutex_t* mutex = (mutex_t*)Handle;
     mutex->unlock();
 }
@@ -169,7 +162,7 @@ ACPI_STATUS AcpiOsCreateSemaphore(UINT32 MaxUnits, UINT32 InitialUnits, void **O
     sem->lock = 0;
     sem->count = InitialUnits;
     *OutHandle = sem;
-    //kprintf("Create Semaphore %d, %p\n", InitialUnits, sem);
+
 
     return AE_OK;
 }

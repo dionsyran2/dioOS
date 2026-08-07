@@ -1,7 +1,7 @@
 
 OUTPUT_FORMAT(elf64-x86-64)
 
-ENTRY(main)
+ENTRY(_start)
 
 SECTIONS
 {   
@@ -42,6 +42,14 @@ SECTIONS
         __stop_drivers = .;
     }
 
+    .deviceless-drivers : ALIGN(8) {
+        __start_deviceless_drivers = .;
+
+        KEEP(*(SORT_BY_NAME(.drivers)))
+
+        __stop_deviceless_drivers = .;
+    }
+
     .syscalls : ALIGN(8) {
         __start_syscalls = .;
 
@@ -53,6 +61,13 @@ SECTIONS
     .bss :
     {
         *(.bss .bss.*)
+    }
+
+    .init_array : {
+        PROVIDE(__init_array_start = .);
+        KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
+        KEEP(*(.init_array .ctors))
+        PROVIDE(__init_array_end = .);
     }
 
     _KernelEnd = .;

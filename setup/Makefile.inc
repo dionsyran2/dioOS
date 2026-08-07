@@ -19,6 +19,22 @@ CROSS_GCC := $(TOOLCHAIN_DIR)/bin/$(TARGET_ARCH)-gcc
 STDCXX_PATH := $(shell $(CROSS_GCC) -print-file-name=libstdc++.so.6)
 LIBGCC_PATH := $(shell $(CROSS_GCC) -print-file-name=libgcc_s.so.1)
 
+
+initfs:
+	mkdir $(OSDIR)/tmp_initfs
+	# Make the /dev and /proc folders
+	mkdir $(OSDIR)/tmp_initfs/dev
+	mkdir $(OSDIR)/tmp_initfs/proc
+	
+	# Copy the necessary files
+	mkdir $(OSDIR)/tmp_initfs/fonts
+	cp $(DISKDIR)/fonts/* $(OSDIR)/tmp_initfs/fonts
+
+	mkdir $(OSDIR)/tmp_initfs/bin
+	cd $(OSDIR)/tmp_initfs && tar --format=ustar -cf $(OSDIR)/initfs.tar *
+	rm -rf $(OSDIR)/tmp_initfs
+
+
 copy_cpp_libs:
 	@echo "Locating toolchain C++ libraries..."
 	@mkdir -p $(DISKDIR)/lib/x86_64-dioOS-gnu/

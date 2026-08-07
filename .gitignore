@@ -36,5 +36,5 @@ toolchain
 
 # Ignore everything in disk/
 disk
-
+initfs.tar
 setup/.config*

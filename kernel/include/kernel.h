@@ -18,9 +18,6 @@
 #include <drivers/timers/common.h>
 #include <CONFIG.h>
 
-#ifdef BUILTIN_DEBUGGER
-#include <minidbg/x86_64/dbg.h>
-#endif
 
 /* DRIVERS */
 #include <drivers/serial/serial.h>

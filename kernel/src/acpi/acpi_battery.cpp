@@ -1,5 +1,5 @@
 /* A battery driver (For portable devices only!) */
-#include <acpi.h>
+/*#include <acpi.h>
 #include <kstdio.h>
 #define BATTERY_DEV_NAME "PNP0C0A"
 #define AC_DEV_NAME "ACPI0003"
@@ -81,7 +81,7 @@ ACPI_STATUS AcpiDeviceProbe(ACPI_HANDLE ObjHandle, UINT32 NestingLevel, void *Co
 
     return AE_OK;
 }
-
+*/
 void acpi_initialize_battery() {
     /*
     AcpiGetDevices(AC_DEV_NAME, AcpiDeviceProbe, NULL, NULL);

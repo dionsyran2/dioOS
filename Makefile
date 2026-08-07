@@ -13,6 +13,7 @@ ESP_SIZE_MB=64
 
 BOOTEFI := $(BOOTDIR)/BOOTX64.EFI
 KERNEL_FONT_FILE := $(DISKDIR)/fonts/vga16.psf
+INITFS_PATH      := $(OSDIR)/initfs.tar
 
 
 .SILENT: all
@@ -22,6 +23,7 @@ all:
 	$(MAKE) buildimg
 
 include setup/Makefile.inc
+
 
 .SILENT: buildimg
 buildimg:
@@ -60,7 +62,7 @@ buildimg:
 	sudo cp $(OSDIR)/startup.nsh mnt/esp/ || echo "Missing startup.nsh"; \
 	sudo cp $(OSDIR)/limine.conf mnt/esp/boot/limine; \
 	[ -f $(BUILDDIR)/kernel.elf ] && sudo cp $(BUILDDIR)/kernel.elf mnt/esp/boot/ || echo "Missing kernel.elf"; \
-	[ -f $(KERNEL_FONT_FILE) ] && sudo cp $(KERNEL_FONT_FILE) mnt/esp/ || echo "Missing kernel font file!"; \
+	[ -f $(INITFS_PATH) ] && sudo cp $(INITFS_PATH) mnt/esp/ || echo "Missing initfs archive!"; \
 	\
 	printf "\e[1;33mInstalling OS files...\e[0m\n"; \
 	[ -d $(DISKDIR) ] && sudo cp -a $(DISKDIR)/* mnt/ext2/ || echo "Missing $(DISKDIR)"; \
@@ -89,7 +91,7 @@ run:
 	qemu-system-x86_64 \
 	-machine q35 \
 	-m 4G \
-	-smp cores=2 \
+	-smp cores=8 \
 	-cpu max \
 	-drive file=$(DISK) \
 	-drive if=pflash,format=raw,unit=0,file="/usr/share/ovmf/OVMF_CODE-pure-efi.fd",readonly=on \
@@ -101,4 +103,23 @@ run:
 	-trace usb_xhci_ \
 	-d guest_errors \
 	--no-reboot \
-	--no-shutdown
+	--no-shutdown \
+	> /dev/null &
+
+rundebug:
+	qemu-system-x86_64 \
+        -machine q35 \
+        -m 4G \
+        -smp cores=8 \
+        -cpu max \
+        -drive file=$(DISK) \
+        -drive if=pflash,format=raw,unit=0,file="/usr/share/ovmf/OVMF_CODE-pure-efi.fd",readonly=on \
+        -drive if=pflash,format=raw,unit=1,file="/usr/share/ovmf/OVMF_VARS-pure-efi.fd" \
+        -device intel-hda,debug=0 \
+        -device qemu-xhci,id=xhci \
+        -nic user,model=e1000e \
+        -monitor stdio \
+        -trace usb_xhci_ \
+        -d guest_errors \
+        --no-reboot \
+        --no-shutdown

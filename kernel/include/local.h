@@ -8,50 +8,45 @@
 #include <kstdio.h>
 
 #include <scheduling/task_scheduler/task_scheduler.h>
+#include <scheduling/task_scheduler/cpu_task_queue.h>
+
 struct task_t;
 struct local_apic_t;
 
 
 struct __attribute__((packed)) cpu_local_data {
-    // 1. Self reference
     cpu_local_data* self_reference; // So we can do GS:0 to retrieve the address
 
     uint64_t scratch;
     uint64_t userspace_return_address;
     
-    // 2. Processor Identification
     uint64_t cpu_id;
     local_apic_t* lapic;
     bool apic_timer_initialized;
     
-    // 3. Interrupts
     interrupt_descriptor_table_t* interrupt_descriptor_table;
 
-    // 4. GDT
     gdt_t* global_descriptor_table;
     tss_t* tss;
     
-    // 5. Scheduling Info
     task_t* current_task;
     task_t* idle_task;
     bool disable_scheduling;
     
-    /* Utilization */
     uint64_t time_in_userspace;
     uint64_t time_in_kernel;
     uint64_t update_tick_count;
 
-    // 6. Syscall Scratch Space
     uint64_t user_stack_scratch;
-    uint64_t kernel_stack_top;
 
     // Chain
     cpu_local_data *next;
 
-    // I totally didn't forget this
     uint64_t idle_time;
 
     uint64_t scheduler_stack;
+
+    cpu_task_queue_t *scheduler_queue;
 };
 
 extern spinlock_t _cpu_local_data_chain_lock;

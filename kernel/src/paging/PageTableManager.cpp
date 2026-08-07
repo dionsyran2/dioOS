@@ -9,26 +9,18 @@
 PageTableManager globalPTM = nullptr;
 uint64_t global_ptm_cr3 = 0;
 /* Constructor */
-PageTableManager::PageTableManager(PageTable* PML4, vm_tracker_t* vm_tracker){
+PageTableManager::PageTableManager(PageTable* PML4){
     this->PML4 = PML4;
-    this->vm_tracker = vm_tracker;
 }
 
-void ClonePTM(PageTableManager* dst, PageTableManager* src){
-    // Copy the Kernel Mappings
-    memcpy(&dst->PML4->entries[256], &src->PML4->entries[256], sizeof(PageEntry[256]));
+void PageTableManager::MapMemory(void* VirtualMemory, void* PhysicalMemory, uint64_t flags){
+    this->MapMemory(VirtualMemory, PhysicalMemory);
 
-    if (!dst->vm_tracker || !src->vm_tracker) return;
+    for (int i = 1; i < 64; i++){ // Start at 1 so we don't even think of modifying the present bit
+        if ((flags & (1 << i)) == 0) continue;
 
-    src->vm_tracker->copy_as_cow(src, dst->vm_tracker, dst);
-}
-
-// A wrapper to allocate a page
-void* PageTableManager::PTM_ALLOCATE_PAGE(){
-    void* page = GlobalAllocator.RequestPage();
-    if (vm_tracker != nullptr) vm_tracker->mark_allocation((uint64_t)page, PAGE_SIZE, VM_FLAG_RW | VM_FLAG_DO_NOT_SHARE);
-
-    return page;
+        this->SetFlag(VirtualMemory, (PT_Flag)i, true);
+    }
 }
 
 /* Maps Virtual -> Physical */
@@ -43,7 +35,7 @@ void PageTableManager::MapMemory(void* VirtualMemory, void* PhysicalMemory){
     PageTable* L3; // PDPT
     if (!L3_Entry->is_flag_set(PT_Flag::Present)){
         /* Allocate a L3 Table (PDPT) */
-        void* virt = PTM_ALLOCATE_PAGE();
+        void* virt = GlobalAllocator.RequestPage();
         uint64_t physical = virtual_to_physical((uint64_t)virt);
 
         memset(virt, 0, PAGE_SIZE);
@@ -63,7 +55,7 @@ void PageTableManager::MapMemory(void* VirtualMemory, void* PhysicalMemory){
     PageTable* L2; // PD
     if (!L2_Entry->is_flag_set(PT_Flag::Present)){
         /* Allocate a L2 Table (PD) */
-        void* virt = PTM_ALLOCATE_PAGE();
+        void* virt = GlobalAllocator.RequestPage();
         uint64_t physical = virtual_to_physical((uint64_t)virt);
 
         memset(virt, 0, PAGE_SIZE);
@@ -83,7 +75,7 @@ void PageTableManager::MapMemory(void* VirtualMemory, void* PhysicalMemory){
     PageTable* L1; // PT
     if (!L1_Entry->is_flag_set(PT_Flag::Present)){
         /* Allocate a L1 Table (PT) */
-        void* virt = PTM_ALLOCATE_PAGE();
+        void* virt = GlobalAllocator.RequestPage();
         uint64_t physical = virtual_to_physical((uint64_t)virt);
 
         memset(virt, 0, PAGE_SIZE);
@@ -121,7 +113,7 @@ void PageTableManager::SetMapping(void* VirtualMemory, uint64_t value){
     PageTable* L3; // PDPT
     if (!L3_Entry->is_flag_set(PT_Flag::Present)){
         /* Allocate a L3 Table (PDPT) */
-        void* virt = PTM_ALLOCATE_PAGE();
+        void* virt = GlobalAllocator.RequestPage();
         uint64_t physical = virtual_to_physical((uint64_t)virt);
 
         memset(virt, 0, PAGE_SIZE);
@@ -141,7 +133,7 @@ void PageTableManager::SetMapping(void* VirtualMemory, uint64_t value){
     PageTable* L2; // PD
     if (!L2_Entry->is_flag_set(PT_Flag::Present)){
         /* Allocate a L2 Table (PD) */
-        void* virt = PTM_ALLOCATE_PAGE();
+        void* virt = GlobalAllocator.RequestPage();
         uint64_t physical = virtual_to_physical((uint64_t)virt);
 
         memset(virt, 0, PAGE_SIZE);
@@ -161,7 +153,7 @@ void PageTableManager::SetMapping(void* VirtualMemory, uint64_t value){
     PageTable* L1; // PT
     if (!L1_Entry->is_flag_set(PT_Flag::Present)){
         /* Allocate a L1 Table (PT) */
-        void* virt = PTM_ALLOCATE_PAGE();
+        void* virt = GlobalAllocator.RequestPage();
         uint64_t physical = virtual_to_physical((uint64_t)virt);
 
         memset(virt, 0, PAGE_SIZE);
@@ -367,4 +359,50 @@ uint64_t PageTableManager::getMapping(void* VirtualMemory){
     /* Get the flag */
     PageEntry* page = &L1->entries[index.P_i]; // Point directly to the PTE in the L1 table
     return page->value;
+}
+
+// Inside PageTableManager.cpp
+void PageTableManager::destroyUserMappings() {
+    if (!this->PML4) return;
+
+    for (int i = 0; i < 256; i++) {
+        PageEntry entry = this->PML4->entries[i];
+        
+        if (entry.is_flag_set(PT_Flag::Present)) {
+            uint64_t phys_addr = entry.get_address();
+            PageTable* pdpt = (PageTable*)physical_to_virtual(phys_addr);
+            
+            // Recurse to Level 3 (PDPT)
+            _free_table_recursive(pdpt, 3);
+        }
+    }
+}
+
+void PageTableManager::_free_table_recursive(PageTable* table, int level) {
+    // If we reach Level 1 (PT), the tables below it are the physical data frames.
+    // The VMA `_remove_segment` already freed the data frames! 
+    // We only free the routing tables here.
+    if (level == 1) {
+        GlobalAllocator.FreePage((void*)virtual_to_physical((uint64_t)table));
+        return;
+    }
+
+    // For Level 3 (PDPT) and Level 2 (PD), recurse downward.
+    for (int i = 0; i < 512; i++) {
+        PageEntry entry = table->entries[i];
+        
+        if (entry.is_flag_set(PT_Flag::Present)) {
+            // Check for huge pages (2MB/1GB). They point directly to data, not to lower tables.
+            bool is_huge_page = ((level == 2 || level == 3) && entry.is_flag_set(PT_Flag::LargerPages));
+
+            if (!is_huge_page) {
+                uint64_t phys_addr = entry.get_address();
+                PageTable* next_table = (PageTable*)physical_to_virtual(phys_addr);
+                _free_table_recursive(next_table, level - 1);
+            }
+        }
+    }
+
+    // After all children are freed, free this table
+    GlobalAllocator.FreePage((void*)virtual_to_physical((uint64_t)table));
 }

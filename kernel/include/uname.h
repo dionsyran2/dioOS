@@ -1,5 +1,4 @@
 #pragma once
-#include <syscalls/syscalls.h>
 
 struct utsname {
 	char sysname[65];

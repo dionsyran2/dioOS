@@ -193,7 +193,13 @@ void* malloc(size_t size){
     heap_header* segment = find_free_segment(size);
 
     if (segment == nullptr){
-        ExpandHeap(size * 2);
+        size_t expand_size = size;
+        if (expand_size < 2 * 1024 * 1024) { // Only double if it's less than 2MB
+            expand_size *= 2; 
+        } else {
+            expand_size += 0x1000; // Otherwise, just give it what it needs + 1 page for safety
+        }
+        ExpandHeap(expand_size);
         segment = find_free_segment(size);
     }
 

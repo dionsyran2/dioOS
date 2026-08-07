@@ -45,8 +45,10 @@ namespace kstd{
     class linked_list_t{
         public:
         // For multithreaded operations
-        void lock(){
-            this->rflags = spin_lock(&this->spinlock);
+        uint64_t lock(){
+            uint64_t r = spin_lock(&this->spinlock);
+            this->rflags = r;
+            return r;
         }
         
         void unlock(){

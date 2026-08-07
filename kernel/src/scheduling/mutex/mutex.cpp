@@ -1,42 +1,72 @@
 #include <scheduling/mutex/mutex.h>
-#include <scheduling/apic/lapic.h>
-#include <drivers/timers/common.h>
+#include <kerrno.h>
 
-bool mutex_t::lock(uint64_t timeout){
+bool mutex_t::lock(uint64_t timeout_ms) {
     task_t* self = task_scheduler::get_current_task();
-    uint64_t end_ticks = local_apic_list->tick_count + (timeout * local_apic_list->ticks_per_ms);
+    if (!self) return false;
 
-    if (self == nullptr) return false; // wtf am i supposed to do? 
-    
-    while(1){        
-        uint64_t rflags = spin_lock(&this->spinlock);
-        if (self->pid == this->owner_pid || this->owner_pid == -1){
-            self->counter++;
-            spin_unlock(&this->spinlock, rflags);
-            return true;
-        }
+    uint64_t flags = spin_lock(&this->spinlock);
 
-        spin_unlock(&this->spinlock, rflags);
-        
-        if (end_ticks <= local_apic_list->tick_count) break;
-        Sleep(1);
-    }
-
-    return false;
-}
-
-bool mutex_t::unlock(){
-    task_t* self = task_scheduler::get_current_task();
-    if (self == nullptr) return false;
-
-    if (self->pid == this->owner_pid || this->owner_pid == -1){
-        uint64_t rflags = spin_lock(&this->spinlock);
-        if (self->counter > 0) self->counter--;
-        if (self->counter == 0) this->owner_pid = -1;
-        spin_unlock(&this->spinlock, rflags);
-
+    // Fast Path: Mutex is free!
+    if (this->owner == nullptr) {
+        this->owner = self;
+        spin_unlock(&this->spinlock, flags);
         return true;
     }
 
-    return false;
+    // Slow Path: Mutex is held. We must block.
+    this->wait_queue.add(self);
+
+    
+    if (timeout_ms > 0) {
+        self->block(timeout_ms, nullptr);
+    } else {
+        self->block();
+    }
+
+    // Acquire the lock again to inspect state safely
+    flags = spin_lock(&this->spinlock);
+
+    // Check if we woke up because of a timeout
+    if (self->block_status == -ETIMEDOUT) {
+        for (int i = 0; i < this->wait_queue.size(); i++) {
+            if (this->wait_queue.get(i) == self) {
+                this->wait_queue.remove(i);
+                break;
+            }
+        }
+        spin_unlock(&this->spinlock, flags);
+        return false; // Lock acquisition failed due to timeout
+    }
+
+    spin_unlock(&this->spinlock, flags);
+    return true; // We successfully inherited the lock
+}
+
+void mutex_t::unlock() {
+    uint64_t flags = spin_lock(&this->spinlock);
+
+    task_t* self = task_scheduler::get_current_task();
+    if (this->owner != self) {
+        // Bug! Trying to unlock a mutex we don't own.
+        spin_unlock(&this->spinlock, flags);
+        return;
+    }
+
+    // If no one is waiting, simply free the lock and exit
+    if (this->wait_queue.size() == 0) {
+        this->owner = nullptr;
+        spin_unlock(&this->spinlock, flags);
+        return;
+    }
+
+    // Pop the next thread from our wait list
+    task_t* next_owner = this->wait_queue.get(0);
+    this->wait_queue.remove(0);
+
+    this->owner = next_owner;
+
+    spin_unlock(&this->spinlock, flags);
+
+    next_owner->unblock();
 }

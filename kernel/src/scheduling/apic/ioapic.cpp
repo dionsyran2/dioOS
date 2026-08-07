@@ -141,7 +141,7 @@ void set_apic_irq(uint8_t irq, uint8_t vector, bool mask, bool l_sense, bool act
 
     if (level_sense) low |= 1 << 15; // Trigger Mode: 1 = Level Sensitive
     if (active_low) low |= 1 << 13; // Pin Polarity: 1 = Active Low
-    
+
     uint32_t high = 0;
     high |= 0 << 24; // Destination
 

@@ -28,10 +28,14 @@ extern "C" void apic_timer_handler_cpp(__registers_t* regs){
 
     cpu_local_data* local = get_cpu_local_data();
     local->lapic->tick_count++;
+    
 
-    if (local->lapic->id == 0 && local->lapic->tick_count % 1000 == 0) {
-        current_time++;
-        TSC::update_prev_cnt();
+    if (local->lapic->id == 0) {
+        time_since_boot++;
+        if (local->lapic->tick_count % 1000 == 0){
+            current_time++;
+            TSC::update_prev_cnt();
+        }
     }
     EOI();
 

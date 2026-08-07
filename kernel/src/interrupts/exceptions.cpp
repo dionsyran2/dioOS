@@ -6,6 +6,8 @@
 #include <panic.h>
 #include <memory.h>
 #include <scheduling/apic/lapic.h>
+#include <CONFIG.h>
+#include <signum.h>
 
 struct stack_frame_t {
     struct stack_frame_t* rbp;
@@ -57,6 +59,15 @@ void dump_stack_trace(stack_frame_t* stack) {
 }
 
 void log_registers(bool serial, isr_exception_info_t* registers){
+    if (globalPTM.getPhysicalAddress(registers) == 0){
+        if (serial) {
+            serialf("log_registers: registers are inaccessible (%p)\n", registers);
+        } else {
+            kprintf("log_registers: registers are inaccessible (%p)\n", registers);
+        }
+        return;
+    }
+    
     if (serial){
         serialf("\e[4;31m!----------------- REGISTER DUMP -----------------!\n\e[0m");
         serialf("RAX=%p\tRBX=%p\tRCX=%p \nRDX=%p\tRSI=%p\tRDI=%p \nRBP=%p\tRSP=%p\tR8=%p \nR9=%p \tR10=%p\tR11=%p \nR12=%p\tR13=%p\tR14=%p \nR15=%p\tRIP=%p\tCR3=%p\n",
@@ -79,10 +90,13 @@ void log_registers(bool serial, isr_exception_info_t* registers){
 void PageFault(isr_exception_info_t* info){
     uint64_t address;
     __asm__ volatile ("mov %%cr2, %0" : "=r" (address));
-    
-    task_t* self = task_scheduler::get_current_task();
 
-    if (self){
+    uint64_t rsp;
+    __asm__ volatile ("mov %%rsp, %0" : "=r" (rsp));
+    
+    //task_t* self = task_scheduler::get_current_task();
+
+    /*if (self){
         // AAAAAAAAAAAAAHHH, NEVER MODIFY THE DAMN FPU... I HAVE BEEN CHASING THIS BUG FOR 2 DAYS
         save_fpu_state(self->saved_fpu_state);
 
@@ -128,12 +142,18 @@ void PageFault(isr_exception_info_t* info){
         restore_fpu_state(self->saved_fpu_state);
         // Return execution
         return;
-    }
+    }*/
 
 continue_pf_exception:
+    #ifdef EXIT_ON_EXCEPTION 
+        if (self){
+            self->exit(SIGSEGV);
+        }
+    #endif
+
     send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
     PageTableManager* ptm = &globalPTM;
-    if (self && self->ptm) ptm = self->ptm;
+    //if (self && self->ptm) ptm = self->ptm;
 
 
     log_registers(false, info);
@@ -148,7 +168,8 @@ continue_pf_exception:
     uint8_t ss = (errorCode >> 6) & 0b00000001;
     uint8_t SGX = (errorCode >> 15) & 0b00000001;
 
-    panic("Page Fault!\nFault Address: %p\nFlags:\n\e[0;33m%s%s%s%s%s%s%s%s\e[0m\nPaging Raw Value: %p\nRunning task: %s (%d)\n",
+    cpu_local_data *local = get_cpu_local_data();
+    panic("Page Fault!\nFault Address: %p\nFlags:\n\e[0;33m%s%s%s%s%s%s%s%s\e[0m\nPaging Raw Value: %p\n",
         address,
         p ? "Page Protection Violation\n" : "Non-Present Page\n",
         w ? "Write Access\n" : "Read Access\n",
@@ -158,13 +179,19 @@ continue_pf_exception:
         pk  && p  ? "Protection-Key violation\n" : "",
         ss  && p  ? "Shadow Stack access\n" : "",
         SGX && p  ? "SGX violation\n" : "",
-        ptm->getMapping((void*)address),
-        self ? self->name : "None",
-        self ? self->pid : 0
+        ptm->getMapping((void*)address)
     );
 }
 
 void DoubleFault(isr_exception_info_t* info){
+    #ifdef EXIT_ON_EXCEPTION 
+        task_t *self = task_scheduler::get_current_task();
+        if (self){
+            self->exit(SIGSEGV);
+        }
+    #endif
+    
+
     send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
     log_registers(false, info);
 
@@ -172,16 +199,32 @@ void DoubleFault(isr_exception_info_t* info){
 }
 
 void GeneralProtection(isr_exception_info_t* info){
+    //task_t *self = task_scheduler::get_current_task();
+
+    #ifdef EXIT_ON_EXCEPTION 
+        if (self){
+            self->exit(SIGSEGV);
+        }
+    #endif
+    
+
     send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
     log_registers(false, info);
-    task_t *self = task_scheduler::get_current_task();
 
     stack_frame_t* stack = (stack_frame_t*)info->rbp;
     dump_stack_trace(stack);
-    panic("General Protection Fault!\n Error Code: %p\n Running task: %s (%d)\n", info->error_code, self ? self->name : "None", self ? self->pid : 0);
+    panic("General Protection Fault!\n Error Code: %p\n", info->error_code);
 }
 
 void DivisionError(isr_exception_info_t* info){
+    #ifdef EXIT_ON_EXCEPTION 
+        task_t *self = task_scheduler::get_current_task();
+        if (self){
+            self->exit(SIGSEGV);
+        }
+    #endif
+    
+
     send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
     log_registers(false, info);
 
@@ -192,6 +235,14 @@ void DivisionError(isr_exception_info_t* info){
 }
 
 void InvalidOpcode(isr_exception_info_t* info){
+    #ifdef EXIT_ON_EXCEPTION 
+        task_t *self = task_scheduler::get_current_task();
+        if (self){
+            self->exit(SIGSEGV);
+        }
+    #endif
+    
+
     send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
     log_registers(false, info);
 
@@ -201,6 +252,13 @@ void InvalidOpcode(isr_exception_info_t* info){
 }
 
 void Debug(isr_exception_info_t* info){
+    #ifdef EXIT_ON_EXCEPTION
+        task_t *self = task_scheduler::get_current_task();
+        if (self){
+            self->exit(SIGSEGV);
+        }
+    #endif
+    
     send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
     log_registers(false, info);
 

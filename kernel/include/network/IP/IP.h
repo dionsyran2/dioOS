@@ -23,7 +23,8 @@ struct ipv4_header_t {
 
 namespace network{
     namespace IP{
-        size_t write_header(uint64_t nic_id, void *buffer, uint8_t protocol, uint32_t source_ip, uint32_t destination_ip, uint16_t payload_size);
+        size_t write_header(uint64_t nic_id, void *buffer, uint8_t protocol, uint32_t source_ip, uint32_t destination_ip, uint16_t payload_size, uint16_t ident = 0, uint16_t flags_fragment = 0);
+        size_t send(uint64_t id, void *buffer, size_t size);
         void handle_packet(uint64_t nic, void *buffer, size_t size);
     }
 }

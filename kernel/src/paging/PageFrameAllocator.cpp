@@ -119,9 +119,13 @@ bool PageFrameAllocator::LockPage(void* page){
 }
 
 bool PageFrameAllocator::LockPages(void* page, size_t amount){
+    uint64_t physical = (uint64_t)page >= MEMORY_BASE ? virtual_to_physical((uint64_t)page) : (uint64_t)page;
+    uint64_t start_index = physical / 0x1000;
+    
+    if (start_index + amount > total_pages) return false;
+
     for (size_t i = 0; i < amount; i++){
-        void* pg = (void*)((uint64_t)page + (i * 0x1000));
-        if (LockPage(pg) == false) return false;
+        page_table[start_index + i].flags |= PAGE_FLAGS_LOCKED;
     }
     return true;
 }
@@ -154,15 +158,18 @@ bool PageFrameAllocator::UnlockPage(void* page){
     return true;
 }
 
-bool PageFrameAllocator::UnlockPages(void* page, size_t amount){
-    for (size_t i = 0; i < amount; i++){
-        void* pg = (void*)((uint64_t)page + (i * 0x1000));
-        if (UnlockPage(pg) == false) return false;
-    }
 
+bool PageFrameAllocator::UnlockPages(void* page, size_t amount){
+    uint64_t physical = (uint64_t)page >= MEMORY_BASE ? virtual_to_physical((uint64_t)page) : (uint64_t)page;
+    uint64_t start_index = physical / 0x1000;
+    
+    if (start_index + amount > total_pages) return false;
+
+    for (size_t i = 0; i < amount; i++){
+        page_table[start_index + i].flags &= ~PAGE_FLAGS_LOCKED;
+    }
     return true;
 }
-
 
 
 bool PageFrameAllocator::ReservePage(void* page){
@@ -278,91 +285,68 @@ bool PageFrameAllocator::SetReferenceCount(uint64_t page, int ref_cnt){
 }
 
 void* PageFrameAllocator::RequestPage(){
-    uint64_t rflags = spin_lock(&spinlock); // Acquire the PFA spinlock
-
-    uint64_t ret = 0;
-
-    for (uint64_t i = last_free_index; i < total_pages; i++){
-        uint64_t page = i * 0x1000;
-        if (IsLocked(page)) continue;
-
-        if (!LockPage((void*)page)) continue;
-
-        ret = page;
-        free_memory -= 0x1000;
-        used_memory += 0x1000;
-
-        SetReferenceCount(page, 1);
-        break;
-    }
-
-    spin_unlock(&spinlock, rflags); // Free the spinlock
-
-    return (void*)physical_to_virtual(ret);
+    return RequestPages(1);
 }
 
 void* PageFrameAllocator::RequestPages(size_t amount){
-    uint64_t rflags = spin_lock(&spinlock); // Acquire the PFA spinlock
+    if (amount == 0) return nullptr;
+    uint64_t rflags = spin_lock(&spinlock);
 
-    uint64_t ret = 0;
+    uint64_t start_idx = last_free_index;
+    size_t free_count = 0;
 
     for (uint64_t i = last_free_index; i < total_pages; i++){
-        uint64_t page = i * 0x1000;
-        if (IsLocked(page)) continue;
+        if (page_table[i].flags & PAGE_FLAGS_LOCKED) {
+            free_count = 0;
+            start_idx = i + 1;
+            continue;
+        }
 
-        bool free = true;
-        for (uint64_t b = i; b < i + amount; b++){
-            if (IsLocked(b * 0x1000)){
-                free = false;
-                i = b;
-                break;
+        free_count++;
+
+        if (free_count == amount) {
+            for (size_t j = 0; j < amount; j++){
+                page_table[start_idx + j].flags |= PAGE_FLAGS_LOCKED;
+                page_table[start_idx + j].reference_count = 1;
             }
+
+            free_memory -= (amount * 0x1000);
+            used_memory += (amount * 0x1000);
+            last_free_index = start_idx + amount; // Don't check these again next time
+
+            spin_unlock(&spinlock, rflags);
+            return (void*)physical_to_virtual(start_idx * 0x1000);
         }
-
-        if (!free) continue;
-
-        if (!LockPages((void*)page, amount)) continue;
-
-        for (uint64_t b = i; b < i + amount; b++){
-            SetReferenceCount(b * 0x1000, 1);
-        }
-        ret = page;
-        free_memory -= (amount * 0x1000);
-        used_memory += (amount * 0x1000);
-
-        break;
     }
 
-    spin_unlock(&spinlock, rflags); // Free the spinlock
-
-    return (void*)physical_to_virtual(ret);
+    spin_unlock(&spinlock, rflags);
+    return nullptr; // Out of memory!
 }
 
 void PageFrameAllocator::FreePage(void* page){
-    if ((uint64_t)page < 1048576) return;
-
-    uint64_t rflags = spin_lock(&spinlock); // Acquire the PFA spinlock
-
-    
-    free_memory += 0x1000;
-    used_memory -= 0x1000;
-
-    UnlockPage(page);
-
-    uint64_t physical = virtual_to_physical((uint64_t)page);
-    uint64_t index = physical / 0x1000;
-    if (index < last_free_index) last_free_index = index;
-
-
-    spin_unlock(&spinlock, rflags); // Free the spinlock
+    return FreePages(page, 1);
 }
 
 void PageFrameAllocator::FreePages(void* page, size_t amount){
-    for (uint64_t i = 0; i < amount; i++){
-        FreePage((void*)((uint64_t)page + (i * 0x1000)));
-    }
-}
+    uint64_t physical = (uint64_t)page >= MEMORY_BASE ? virtual_to_physical((uint64_t)page) : (uint64_t)page;
+    
+    if (physical < 1048576) return; 
 
+    uint64_t start_index = physical / 0x1000;
+
+    uint64_t rflags = spin_lock(&spinlock);
+
+    if (start_index < last_free_index) last_free_index = start_index;
+    free_memory += (amount * 0x1000);
+    used_memory -= (amount * 0x1000);
+
+    // Unlock them all
+    for (uint64_t i = 0; i < amount; i++){
+        page_table[start_index + i].flags &= ~PAGE_FLAGS_LOCKED;
+    }
+
+    spin_unlock(&spinlock, rflags);
+}
 
 void PageFrameAllocator::IncreaseReferenceCount(void* page){
     // Get the physical address

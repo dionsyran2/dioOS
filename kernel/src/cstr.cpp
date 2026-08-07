@@ -11,39 +11,80 @@ static bool is_delim(char c, const char* delim) {
     return false;
 }
 
-char* strtok_r(char* str, const char* delim, char** saveptr) {
-    char* token_start;
 
-    if (str != nullptr) {
-        *saveptr = str;
-    }
-    
+#define BITOP(a,b,op) \
+ ((a)[(size_t)(b)/(8*sizeof *(a))] op (size_t)1<<((size_t)(b)%(8*sizeof *(a))))
 
-    token_start = *saveptr;
-    while (*token_start != '\0' && is_delim(*token_start, delim)) {
-        token_start++;
-    }
+size_t strspn(const char *s, const char *c)
+{
+	const char *a = s;
+	size_t byteset[32/sizeof(size_t)];
+    memset(byteset, 0, 32);
 
+	if (!c[0]) return 0;
+	if (!c[1]) {
+		for (; *s == *c; s++);
+		return s-a;
+	}
 
-    if (*token_start == '\0') {
-        *saveptr = token_start;
-        return nullptr;
-    }
+	for (; *c && BITOP(byteset, *(unsigned char *)c, |=); c++);
+	for (; *s && BITOP(byteset, *(unsigned char *)s, &); s++);
+	return s-a;
+}
 
+#define ONES ((size_t)-1/UINT8_MAX)
+#define HIGHS (ONES * (UINT8_MAX/2+1))
+#define HASZERO(x) (((x)-ONES) & ~(x) & HIGHS)
 
-    char* token_end = token_start;
-    while (*token_end != '\0' && !is_delim(*token_end, delim)) {
-        token_end++;
-    }
+char *__strchrnul(const char *s, int c)
+{
+	size_t *w, k;
 
-    if (*token_end == '\0') {
-        *saveptr = token_end;
-    } else {
-        *token_end = '\0';
-        *saveptr = token_end + 1;
-    }
+	c = (unsigned char)c;
+	if (!c) return (char *)s + strlen(s);
 
-    return token_start;
+	for (; (uintptr_t)s % sizeof(size_t); s++)
+		if (!*s || *(unsigned char *)s == c) return (char *)s;
+	k = ONES * c;
+	for (w = (size_t *)s; !HASZERO(*w) && !HASZERO(*w^k); w++);
+	for (s = (const char *)w; *s && *(unsigned char *)s != c; s++);
+	return (char *)s;
+}
+
+size_t strcspn(const char *s, const char *c)
+{
+	const char *a = s;
+	size_t byteset[32/sizeof(size_t)];
+
+	if (!c[0] || !c[1]) return __strchrnul(s, *c)-a;
+
+	memset(byteset, 0, sizeof byteset);
+	for (; *c && BITOP(byteset, *(unsigned char *)c, |=); c++);
+	for (; *s && !BITOP(byteset, *(unsigned char *)s, &); s++);
+	return s-a;
+}
+
+char *strtok(char *s, const char *sep)
+{
+	static char *p;
+	if (!s && !(s = p)) return NULL;
+	s += strspn(s, sep);
+	if (!*s) return p = 0;
+	p = s + strcspn(s, sep);
+	if (*p) *p++ = 0;
+	else p = 0;
+	return s;
+}
+
+char *strtok_r(char *s, const char *sep, char **p)
+{
+	if (!s && !(s = *p)) return NULL;
+	s += strspn(s, sep);
+	if (!*s) return *p = 0;
+	*p = s + strcspn(s, sep);
+	if (**p) *(*p)++ = 0;
+	else *p = 0;
+	return s;
 }
 
 char* strdup(const char* src) {
@@ -283,7 +324,7 @@ extern "C" char toupper(char c) {
     return c;
 }
 
-extern "C" void strcpy(char* dest, char* src) {
+extern "C" void strcpy(char* dest, const char* src) {
     memset((void*)dest, 0, strlen(dest));
     while (*src != '\0') {
         *dest = *src;
@@ -454,4 +495,50 @@ int stringf(char* buffer, size_t buffer_size, const char* format, ...){
 
     va_end(args);
     return ret;
+}
+
+// @brief A helper to decode utf8 into a codepoint (e.g. wide char)
+size_t decode_utf8(const char* str, uint32_t* codepoint) {
+    uint8_t c = (uint8_t)str[0];
+
+    if (c <= 0x7F) {
+        // 1-byte (ASCII)
+        *codepoint = c;
+        return 1;
+    } else if ((c & 0xE0) == 0xC0) {
+        // 2-byte
+        uint8_t c1 = (uint8_t)str[1];
+        if ((c1 & 0xC0) != 0x80) return 0;
+
+        *codepoint = ((c & 0x1F) << 6) |
+                    (c1 & 0x3F);
+        return 2;
+    } else if ((c & 0xF0) == 0xE0) {
+        // 3-byte
+        uint8_t c1 = (uint8_t)str[1];
+        uint8_t c2 = (uint8_t)str[2];
+        if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80) return 0;
+
+        *codepoint = ((c & 0x0F) << 12) |
+                    ((c1 & 0x3F) << 6) |
+                    (c2 & 0x3F);
+        return 3;
+    } else if ((c & 0xF8) == 0xF0) {
+        // 4-byte
+        uint8_t c1 = (uint8_t)str[1];
+        uint8_t c2 = (uint8_t)str[2];
+        uint8_t c3 = (uint8_t)str[3];
+        if ((c1 & 0xC0) != 0x80 ||
+            (c2 & 0xC0) != 0x80 ||
+            (c3 & 0xC0) != 0x80) return 0;
+
+        *codepoint = ((c & 0x07) << 18) |
+                    ((c1 & 0x3F) << 12) |
+                    ((c2 & 0x3F) << 6) |
+                    (c3 & 0x3F);
+        return 4;
+    }
+
+    // UNREACHABLE
+    return 0;
 }

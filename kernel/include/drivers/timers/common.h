@@ -26,3 +26,4 @@ extern bool is_pit_enabled;
 
 extern uint64_t current_time; // UNIX time
 extern uint64_t boot_time; // UNIX time
+extern uint64_t time_since_boot; // Milliseconds
