@@ -6,9 +6,22 @@
 #include <paging/PageTableManager.h>
 #include <scheduling/task_scheduler/cpu_task_queue.h>
 #include <structures/trees/avl_tree.h>
+#include <memory/vmm.h>
 
 // Forward Declaration
+struct mm_struct_t;
 struct cpu_task_queue_t;
+
+
+
+struct poll_table_t {
+    void (*callback)(poll_table_t *pt);
+    void *ctx;
+
+    int events = 0;
+    
+    kstd::linked_list_t<kstd::linked_list_t<poll_table_t*>*> poll_list; // A list of poll lists (Where this one has been added)
+};
 
 
 #define DEFAULT_STACK_SIZE           (1 * 1024 * 1024) // 1 MB
@@ -27,6 +40,7 @@ enum __task_state {
     PAUSED, /* The task has been paused, due to a task switch */
     RUNNING, /* The task is currently being executed */
     BLOCKED, /* The task is blocked and part of the block queue */
+    INTERRUPTABLE,
     ZOMBIE, /* Its dead (it has exited)*/
 };
 
@@ -51,6 +65,9 @@ struct task_t {
 
     __stack_t kernel_stack; // Used for interrupts when switching from user->kernel mode
                             // And for kernel-space tasks
+
+    /* Memory */
+    mm_struct_t *vmm = nullptr;
 
     /* Execution stuff */
     function task_entry_point;
@@ -81,6 +98,9 @@ struct task_t {
     
     void block();
     void block(uint64_t deadline, kstd::avl_tree_t<task_t*> *block_list);
+    
+    int read_from_userspace(void *kbuffer, void *uaddress, size_t size);
+    int write_to_userspace(void *uaddress, void *kbuffer, size_t size);
 
     void unblock();
 
@@ -93,7 +113,7 @@ namespace task_scheduler {
     // methods
     task_t *get_current_task(); // It will return the current running task (self)
     
-    task_t *create_process(const char *name, function entry, bool userspace);
+    task_t *create_process(const char *name, function entry, bool userspace, bool init = false);
     void mark_as_ready(task_t *task);
     void initialize_core();
     void scheduler_tick(__registers_t* regs, bool change_task = false);

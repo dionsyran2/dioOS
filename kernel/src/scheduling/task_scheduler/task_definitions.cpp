@@ -9,6 +9,7 @@
 #include <drivers/timers/common.h>
 #include <drivers/serial/serial.h>
 #include <structures/trees/avl_tree.h>
+#include <kerrno.h>
 #include <signum.h>
 
 // Initializes the fpu state buffer
@@ -43,6 +44,11 @@ task_t::task_t(function entry, pid_t pid, tid_t tgid, bool is_userspace){
 
     if (is_userspace){
         /* Other Stacks Here!!!! */
+        vmm = new mm_struct_t();
+        this->syscall_stack = ((uint64_t)GlobalAllocator.RequestPage()) + PAGE_SIZE;
+        
+        int errno = 0;
+        this->userspace_stack = (uint64_t)vmm->allocate(DEFAULT_STACK_SIZE, User, errno) + DEFAULT_STACK_SIZE;
     }
 
     this->saved_fpu_state = GlobalAllocator.RequestPages(DIV_ROUND_UP(g_fpu_storage_size, PAGE_SIZE));
@@ -93,7 +99,7 @@ void task_t::block(uint64_t deadline, kstd::avl_tree_t<task_t*> *block_list){
 }
 
 void task_t::unblock(){
-    if (!this->current_state == BLOCKED) return;
+    if (!this->current_state == BLOCKED && !this->current_state == INTERRUPTABLE) return;
 
     // Remove it from any block list
     if (this->block_deadline){
@@ -109,4 +115,44 @@ void task_t::unblock(){
 
     // Insert it again into the scheduling queue
     this->cpu_queue->push(this);
+}
+
+int task_t::read_from_userspace(void *kbuffer, void *uaddress, size_t size){
+    if (!this->vmm) return -EFAULT;
+
+    uint64_t current_cr3 = 0;
+    uint64_t task_cr3 = this->vmm->get_root_page_table();
+    asm volatile ("mov %%cr3, %0" : "=r" (current_cr3));
+
+    if (current_cr3 != task_cr3){
+        asm volatile ("mov %0, %%cr3" :: "r" (task_cr3));
+    }
+
+    memcpy(kbuffer, uaddress, size);
+
+    if (current_cr3 != task_cr3){
+        asm volatile ("mov %0, %%cr3" :: "r" (current_cr3));
+    }
+
+    return 0;
+}
+
+int task_t::write_to_userspace(void *uaddress, void *kbuffer, size_t size){
+    if (!this->vmm) return -EFAULT;
+
+    uint64_t current_cr3 = 0;
+    uint64_t task_cr3 = this->vmm->get_root_page_table();
+    asm volatile ("mov %%cr3, %0" : "=r" (current_cr3));
+
+    if (current_cr3 != task_cr3){
+        asm volatile ("mov %0, %%cr3" :: "r" (task_cr3));
+    }
+
+    memcpy(uaddress, kbuffer, size);
+
+    if (current_cr3 != task_cr3){
+        asm volatile ("mov %0, %%cr3" :: "r" (current_cr3));
+    }
+
+    return 0;
 }

@@ -14,11 +14,15 @@ struct __m_area_t{
     __m_area_t *previous;
 };
 
+struct PageTableManager;
 class mm_struct_t{
     public:
     mm_struct_t();
     ~mm_struct_t();
 
+    uint64_t resolve_physical_address(uint64_t virt);
+    uint64_t get_root_page_table();
+    
     void *allocate(uint64_t start, uint64_t size, uint64_t flags, int &errno);
     void *allocate(uint64_t size, uint64_t flags, int &errno);
 

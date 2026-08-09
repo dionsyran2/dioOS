@@ -9,6 +9,7 @@ namespace vfs{
     int allocate_filesystem_id();
 
     vnode_t *resolve_path(const char *path);
+    dentry_t *resolve_path_dentry(const char *path);
 
     void __release_vnode(vnode_t *node);
     void __invalidate_dentry_cache(const char *path);

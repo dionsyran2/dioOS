@@ -220,7 +220,7 @@ ACPI_STATUS AcpiOsInstallInterruptHandler(UINT32 InterruptLevel, ACPI_OSD_HANDLE
     FreeVector++;
 
 
-    _add_dynamic_isr(vector, (dynamic_isr_handler_t)Handler, Context);
+    add_dynamic_isr(vector, (dynamic_isr_handler_t)Handler, Context);
 
     set_apic_irq(InterruptLevel, vector, false, true, true);
 

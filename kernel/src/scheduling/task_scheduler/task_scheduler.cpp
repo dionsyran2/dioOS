@@ -37,7 +37,7 @@ namespace task_scheduler {
     }
 
     // Forward declaration
-    task_t *create_process(const char *name, function entry, bool userspace);
+    task_t *create_process(const char *name, function entry, bool userspace, bool init);
 
 
     // Initialize the scheduler for the local core
@@ -97,8 +97,8 @@ namespace task_scheduler {
         return local->current_task;
     }
 
-    task_t *create_process(const char *name, function entry, bool userspace){
-        pid_t pid = __atomic_fetch_add(&current_pid, 1, __ATOMIC_SEQ_CST);
+    task_t *create_process(const char *name, function entry, bool userspace, bool init){
+        pid_t pid = init ? 1 : __atomic_fetch_add(&current_pid, 1, __ATOMIC_SEQ_CST);
         task_t *r = new task_t(entry, pid, pid, userspace);
 
         strncpy(r->name, name, sizeof(r->name));
@@ -129,7 +129,7 @@ namespace task_scheduler {
             // Since it hasn't been started yet, we need to configure its registers
 
             // Set the rip:
-            task->registers.rip = (uint64_t)task->task_entry_point;
+            if (task->registers.rip == 0) task->registers.rip = (uint64_t)task->task_entry_point;
 
             // Set the stack. For userspace tasks this will be the userspace stack, otherwise
             // it should be the kernel stack!
@@ -151,7 +151,7 @@ namespace task_scheduler {
             }
 
             // And of course the page tables
-            task->registers.cr3 = /*task->ptm ? virtual_to_physical((uint64_t)task->ptm->PML4) : */global_ptm_cr3;
+            task->registers.cr3 = task->vmm ? task->vmm->get_root_page_table() : global_ptm_cr3;
         }
 
         local->user_stack_scratch = task->current_user_stack;
@@ -244,8 +244,10 @@ namespace task_scheduler {
         if (local->current_task) __save_task(regs, local->current_task);
 
         /* If its state transitioned to PAUSED, it means its not blocked and should be readded to the queue */
-        if (local->current_task && local->current_task->current_state == PAUSED) local->scheduler_queue->push(local->current_task);
-
+        if (local->current_task && (local->current_task->current_state == PAUSED || local->current_task->current_state == INTERRUPTABLE)){
+            local->scheduler_queue->push(local->current_task);
+        }
+        
         task_t *next = __find_runnable_task();
 
         __run_task(next);

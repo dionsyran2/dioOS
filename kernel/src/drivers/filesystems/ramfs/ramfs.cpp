@@ -2,6 +2,7 @@
 #include <drivers/filesystems/ramfs/node.h>
 #include <drivers/filesystems/ramfs/dentry.h>
 #include <drivers/timers/common.h>
+#include <bits/poll.h>
 #include <vfs/vfs.h>
 #include <cstr.h>
 
@@ -137,6 +138,9 @@ namespace ramfs {
         fs->free_vnode(node->inode);
     }
 
+    int vfs_poll(vnode_t *node, int events, poll_table_t *pt){
+        return (POLLIN | POLLOUT) & events; // It will always return POLLIN | POLLOUT
+    }
 
     int vfs_set_attributes(vnode_t *node, vnode_attributes_t *attrs){
         __ramfs *fs = (__ramfs *)node->fs_data;

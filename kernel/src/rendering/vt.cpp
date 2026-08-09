@@ -6,6 +6,7 @@
 #include <drivers/audio/pc_speaker/pc_speaker.h>
 #include <math.h>
 #include <scheduling/task_scheduler/task_scheduler.h>
+#include <kerrno.h>
 
 void vt_blinker(virtual_terminal *term){
     task_t *self = task_scheduler::get_current_task();
@@ -262,7 +263,7 @@ void virtual_terminal::write(wchar_t chr){
     this->cursor_x++;
 }
 
-void virtual_terminal::write(char *str, size_t length, bool return_on_newline){
+void virtual_terminal::write(const char *str, size_t length, bool return_on_newline){
     this->draw_cursor(true);
     
     for (uint32_t i = 0; i < length; i++) {
@@ -573,4 +574,12 @@ void virtual_terminal::handle_sgr(int *parameter_list, int parameter_count){
             case 49: current_bg = 0x000000; break; // Reset BG
         }
     }
+}
+
+int virtual_terminal::ioctl(int op, char *argp){
+    return -EOPNOTSUPP;
+}
+
+void virtual_terminal::apply_termios(termios *state){
+    return;
 }

@@ -85,7 +85,7 @@ namespace PIT {
         SetFrequency(1000);
 
         // 2. Register Interrupt
-        _add_dynamic_isr(PIT_INTERRUPT_VECTOR, pit_interrupt_handler, nullptr);
+        add_dynamic_isr(PIT_INTERRUPT_VECTOR, pit_interrupt_handler, nullptr);
         
         // 3. Route IRQ 0 (or its override) to the Vector
         set_apic_irq(0, PIT_INTERRUPT_VECTOR, false);

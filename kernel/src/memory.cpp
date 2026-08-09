@@ -16,7 +16,7 @@ uint64_t virtual_to_physical(uint64_t addr){
 }
 
 uint64_t get_virtual_device_mmio_address(uint64_t physical){
-	return (MMIO_BASE + physical); // 1GB above the rest of the memory to avoid conflicts
+	return (MMIO_BASE + physical);
 }
 
 uint64_t GetMemorySize(limine_memmap_response* mmap){

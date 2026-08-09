@@ -16,8 +16,9 @@
 #include <network/common/common.h>
 #include <rendering/multiplexer.h>
 #include <vfs/vfs.h>
+#include <elf/elf.h>
 
-// TODO: Load the font file from initfs
+
 
 bool no_smp = false; // Do not enable the APs
 bool is_sse_enabled;
@@ -187,6 +188,7 @@ void init_kernel(){
     init_io_apic(); // Note: All external interrupts go directly to the bsp!!!
     setup_bsp_interrupts();
     asm ("sti");
+    InitSerial();
     
     initialize_timers();
 
@@ -211,7 +213,18 @@ char* init_executables[] = {
 };
 
 void start_userspace(){
+    vnode_t *node = vfs::resolve_path("/temp/test");
+
+    task_t *init = task_scheduler::create_process("init", nullptr, true, true);
+
+    char *argp[] = {
+        "/temp/test",
+        nullptr
+    };
+
+    load_elf(init, node, 1, argp, "/temp/test");
     
+    task_scheduler::mark_as_ready(init);
 }
 
 void dump_fs(int indent, vnode_t *node){
@@ -223,12 +236,11 @@ void dump_fs(int indent, vnode_t *node){
             kprintf("%c", o == (indent - 1) ? '-' : ' ');
         }
         
-
         vnode_t *vnode = out[i].fetch_vnode();
 
         if (!vnode) continue;
 
-        kprintf("%s | %d Bytes | %o / %d\n", out[i].name, vnode->size, vnode->attributes.mode, vnode->attributes.mtime);
+        kprintf("%s | %d Bytes | %o / %d\n", out[i].name, vnode->size, vnode->attributes.mode, S_ISDIR(vnode->attributes.mode));
 
         if (S_ISDIR(vnode->attributes.mode)){
             dump_fs(indent + 2, vnode);
@@ -240,13 +252,12 @@ void dump_fs(int indent, vnode_t *node){
     delete[] out;
 }
 
+#include <drivers/filesystems/devfs/devfs.h>
 void init_kernel_subsystems(){
-    vnode_t *root = vfs::resolve_path("/");
-    dump_fs(0, root);
-
-    
-
-
+    task_t *self = task_scheduler::get_current_task();
+    vnode_t *r = vfs::resolve_path("/");
+    dump_fs(0, r);
+    r->close();
 
     // Initialize ACPI
     ACPI::InitializeACPICA();
@@ -259,5 +270,5 @@ void init_kernel_subsystems(){
 
     start_userspace();
 
-    task_scheduler::get_current_task()->exit(0);
+    self->exit(0);
 }

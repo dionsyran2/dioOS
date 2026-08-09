@@ -12,17 +12,13 @@ extern "C" uint64_t local_user_stack_scratch_offset = offsetof(cpu_local_data, u
 
 /* KERNEL */
 void main(){
-    /* Initialize the Serial Port (for debugging purposes!) */
-    InitSerial(COM1);
-
     if (LIMINE_BASE_REVISION_SUPPORTED == false) {
-        serialf("\e[0;31mLimine base revision not supported!\e[0m\n");
-        while(1) __asm__ __volatile__ ("hlt");
+        while(1) __asm__ __volatile__ ("cli; hlt");
     }
 
     if (framebuffer_request.response == NULL
      || framebuffer_request.response->framebuffer_count < 1) {
-        serialf("\e[0;31mNo framebuffer available\e[0m\n");
+        //serialf("\e[0;31mNo framebuffer available\e[0m\n");
     }
     
     init_kernel();

@@ -3,13 +3,24 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
+#include <line_discipline/line_discipline.h>
 
-#define COM1 0x3F8 // The first COM Port
-#define COM2 0x2F8 // The second COM Port
-// Addresses for further ports are unrealiable and therefore not included
+#define SERIAL_SCRATCH_REGISTER(base) (base + 7)
 
-void InitSerial(uint16_t port);
-void serialWrite(uint16_t port, char c);
-void serialPrint(uint16_t port, const char* str);
+void InitSerial();
+
+class serial_port : public tty_device_t {
+    public:
+    uint16_t address;
+
+    void write(const char *data, size_t size, bool onlcr);
+    int ioctl(int op, char *argp);
+    void apply_termios(termios *state);
+    void handle_interrupt();
+
+    serial_port(uint16_t address, uint8_t irq);
+
+};
+
 void serialf(const char* str, ...);
 void serialfva(const char* str, va_list args);

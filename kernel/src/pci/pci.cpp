@@ -266,7 +266,7 @@ namespace pci{
     }
 
     void register_isr(void (handler)(void*), void *cb){
-        _add_dynamic_isr(PCI_INT_VECTOR, handler, cb);
+        add_dynamic_isr(PCI_INT_VECTOR, handler, cb);
     }
 }
 

@@ -6,7 +6,6 @@
 #include <scheduling/spinlock/spinlock.h>
 #include <structures/lists/linked_list.h>
 #include <math.h>
-#include <kstdio.h>
 
 namespace kstd {
     template <typename T>

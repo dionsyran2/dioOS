@@ -15,6 +15,14 @@ struct vnode_file_operations_t {
     // @returns Bytes written
     int (*write)(vnode_t *node, const void *buffer, size_t size, size_t offset);
 
+    int (*ioctl)(vnode_t *node, int op, char* argp);
+
+    /* It will 'poll' and if its not available, it will add poll_table_t to a list.
+       After that, the caller can freely block, until poll_table_t->cb is called which 
+       should unblock and remove poll_table_t from any lists its actively in
+    */
+    int (*poll)(vnode_t *node, int events, poll_table_t *pt);
+
     // @brief Sets the attributes (owner id, group id, permissions)
     // @return Returns 0 on success, < 0 on failure 
     int (*set_attributes)(vnode_t *node, vnode_attributes_t *attrs);

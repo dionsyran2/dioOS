@@ -19,7 +19,8 @@
 
 #define PS2_PRI_PORT_VECTOR         0x24
 #define PS2_SEC_PORT_VECTOR         0x25
-#define PCI_INT_VECTOR         0x26
+#define PCI_INT_VECTOR              0x26
+#define COM_PORT_INT_VECTOR         0x27
 
 #define FIRST_FREE_VECTOR 0x50
 extern uint64_t FreeVector;
@@ -88,7 +89,7 @@ struct dynamic_isr_t{
 };
 
 
-int _add_dynamic_isr(uint8_t vector, dynamic_isr_handler_t handler, void* context);
+int add_dynamic_isr(uint8_t vector, dynamic_isr_handler_t handler, void* context);
 bool _remove_dynamic_isr(int identifier);
 
 void setup_ap_interrupts();

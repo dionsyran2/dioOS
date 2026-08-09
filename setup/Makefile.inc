@@ -29,6 +29,7 @@ initfs:
 	# Copy the necessary files
 	mkdir $(OSDIR)/tmp_initfs/fonts
 	cp $(DISKDIR)/fonts/* $(OSDIR)/tmp_initfs/fonts
+	cp $(OSDIR)/temp $(OSDIR)/tmp_initfs -r
 
 	mkdir $(OSDIR)/tmp_initfs/bin
 	cd $(OSDIR)/tmp_initfs && tar --format=ustar -cf $(OSDIR)/initfs.tar *

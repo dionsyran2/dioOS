@@ -17,7 +17,7 @@ void PageTableManager::MapMemory(void* VirtualMemory, void* PhysicalMemory, uint
     this->MapMemory(VirtualMemory, PhysicalMemory);
 
     for (int i = 1; i < 64; i++){ // Start at 1 so we don't even think of modifying the present bit
-        if ((flags & (1 << i)) == 0) continue;
+        if ((flags & (1UL << i)) == 0) continue;
 
         this->SetFlag(VirtualMemory, (PT_Flag)i, true);
     }

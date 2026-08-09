@@ -1,6 +1,7 @@
 /* A simple acpi implementation */
 #include <acpi.h>
 #include <memory.h>
+#include <kstdio.h>
 #include <paging/PageTableManager.h>
 #include <acpica/embedded_controller.h>
 

@@ -5,6 +5,8 @@
 #include <stdarg.h>
 #include <drivers/graphics/common.h>
 #include <scheduling/task_scheduler/task_scheduler.h>
+#include <line_discipline/line_discipline.h>
+
 
 #define VT_CELL_WIDTH 8
 #define VT_CELL_HEIGHT 16
@@ -34,7 +36,8 @@ struct __vt_cell{
     uint32_t bg;
 };
 
-class virtual_terminal{
+
+class virtual_terminal : public tty_device_t {
     public:
     virtual_terminal(drivers::GraphicsDriver *driver);
 
@@ -59,12 +62,15 @@ class virtual_terminal{
     void draw_cursor(bool clear = false);
 
     void write(wchar_t chr);
-    void write(char *text, size_t length, bool return_on_newline = false /* Used for kprintf */);
+    void write(const char *text, size_t length, bool onclr);
 
     // Escape sequences
     void handle_csi_command(char command);
     void handle_sgr(int *parameter_list, int parameter_count);
 
+    // Stubs
+    int ioctl(int op, char *argp);
+    void apply_termios(termios *state);
 
     // Cursor stuff but public
     bool cursor_disabled = false;

@@ -13,6 +13,8 @@ mm_struct_t::mm_struct_t(){
     for (int i = 256; i < 512; i++) {
         PML4->entries[i] = globalPTM.PML4->entries[i];
     }
+
+    _reference_count = 1;
     
 }
 
@@ -74,13 +76,18 @@ uint64_t mm_struct_t::_find_unmapped_area(uint64_t length) {
 
 bool mm_struct_t::is_free(uint64_t start, uint64_t size){
     __m_area_t *current = this->_m_area_list;
-
     uint64_t end = start + size;
+
     while (current != nullptr){
         uint64_t current_end = current->start + current->size;
 
-        if (current->start <= start && current->start > current_end) return false;
-        if (current->start < end && current_end > end) return false;
+        // The golden rule of range overlap:
+        if (start < current_end && current->start < end) {
+            return false; // Collision detected!
+        }
+
+        // Advance to the next VMA in the list!
+        current = current->next;
     }
 
     return true;
@@ -216,8 +223,13 @@ void mm_struct_t::_merge_vmas(){
     }
 }
 
+uint64_t mm_struct_t::resolve_physical_address(uint64_t virt){
+    return this->_page_table_manager->getPhysicalAddress((void*)virt);
+}
 
-
+uint64_t mm_struct_t::get_root_page_table(){
+    return virtual_to_physical((uint64_t)this->_page_table_manager->PML4);
+}
 
 
 void *mm_struct_t::allocate(uint64_t start, uint64_t size, uint64_t flags, int &errno){
@@ -250,6 +262,8 @@ void *mm_struct_t::allocate(uint64_t start, uint64_t size, uint64_t flags, int &
 void *mm_struct_t::allocate(uint64_t size, uint64_t flags, int &errno){
     size = ALIGN(size, PAGE_SIZE);
 
+    flags |= (1 << Present);
+
     uint64_t irq_flags = spin_lock(&this->_lock);
 
     uint64_t start = this->_find_unmapped_area(size);
@@ -258,7 +272,6 @@ void *mm_struct_t::allocate(uint64_t size, uint64_t flags, int &errno){
     
     for (size_t offset = 0; offset < size; offset += 0x1000) {
         void *page = GlobalAllocator.RequestPage();
-
         uint64_t physical = virtual_to_physical((uint64_t)page);
         this->_page_table_manager->MapMemory((void*)(start + offset), (void*)physical, flags & 0xfff0000000000fff /* transfer only the PTM flags */);
     }

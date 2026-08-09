@@ -103,7 +103,7 @@ namespace HPET{
         int irq = configure_hpet_interrupt(0);
         if (irq == -1) return false;
         
-        _add_dynamic_isr(HPET_INTERRUPT_VECTOR, hpet_interrupt_handler, nullptr);
+        add_dynamic_isr(HPET_INTERRUPT_VECTOR, hpet_interrupt_handler, nullptr);
         set_apic_irq(irq == -2 ? 2 : irq, HPET_INTERRUPT_VECTOR, false, false, false, irq >= 0 ? true : false);
 
         // Configure the timer

@@ -2,6 +2,7 @@
 #include <vfs/vfs.h>
 #include <kerrno.h>
 
+
 vnode_t::vnode_t(){
 
 }
@@ -66,7 +67,7 @@ int vnode_t::set_attributes(vnode_attributes_t *attrs){
 }
 
 dentry_t *vnode_t::lookup(const char *name){
-    if (!this->operations || !this->operations->lookup) {serialf("ENODIR %s\n\r", name);return nullptr;}
+    if (!this->operations || !this->operations->lookup) {return nullptr;}
 
     this->klock.lock();
     dentry_t *r = this->operations->lookup(this, name);
@@ -93,6 +94,12 @@ int vnode_t::creat(const char *name, uint16_t mode){
 
     if (!this->operations || !this->operations->creat) return -EROFS;
 
+    dentry_t *lookup = this->lookup(name);
+    if (lookup){
+        delete lookup; // Because this is an out-of-cache reference we have to delete it
+        return -EEXIST;
+    }
+
     this->klock.lock();
     
     int r = this->operations->creat(this, name, mode);
@@ -106,6 +113,12 @@ int vnode_t::mkdir(const char *name, uint16_t mode){
     if (!S_ISDIR(this->attributes.mode)) return -ENOTDIR;
 
     if (!this->operations || !this->operations->mkdir) return -EROFS;
+
+    dentry_t *lookup = this->lookup(name);
+    if (lookup){
+        delete lookup; // Because this is an out-of-cache reference we have to delete it
+        return -EEXIST;
+    }
     
     this->klock.lock();
     
@@ -114,6 +127,12 @@ int vnode_t::mkdir(const char *name, uint16_t mode){
     this->klock.unlock();
 
     return r;
+}
+
+int vnode_t::poll(int events, poll_table_t *pt){
+    if (!this->operations || !this->operations->poll) return -EOPNOTSUPP;
+
+    return this->operations->poll(this, events, pt);
 }
 
 int vnode_t::unlink(const char *child) {
@@ -146,4 +165,10 @@ int vnode_t::unlink(const char *child) {
     if (child_dentry) child_dentry->unref();
 
     return ret;
+}
+
+int vnode_t::ioctl(int op, char* argp){
+    if (!this->operations || !this->operations->ioctl) return -EOPNOTSUPP;
+
+    return this->operations->ioctl(this, op, argp);
 }

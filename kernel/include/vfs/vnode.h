@@ -47,6 +47,10 @@ struct vnode_t {
     int get_listing(dentry_t *&out, size_t offset, size_t limit);
     int creat(const char *name, uint16_t mode);
     int mkdir(const char *name, uint16_t mode);
+
+    int poll(int events, poll_table_t *pt);
+
+    int ioctl(int op, char* argp);
     
     int unlink(const char *child);
     int rmdir(const char *child);

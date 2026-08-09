@@ -71,7 +71,7 @@ extern "C" void isr_dispatch(uint64_t vector){
 
 extern "C" void* isr_stub_table_ptrs[256];
 
-int _add_dynamic_isr(uint8_t vector, dynamic_isr_handler_t handler, void* context){
+int add_dynamic_isr(uint8_t vector, dynamic_isr_handler_t handler, void* context){
     // Create the isr structure
     dynamic_isr_t* isr = new dynamic_isr_t();
     isr->isr = handler;

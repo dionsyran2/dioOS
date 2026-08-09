@@ -1,5 +1,7 @@
 #include <rendering/multiplexer.h>
+#include <line_discipline/line_discipline.h>
 #include <cstr.h>
+
 
 vt_multiplexer *global_multiplexer = nullptr;
 
@@ -7,14 +9,23 @@ vt_multiplexer::vt_multiplexer(drivers::GraphicsDriver *driver, uint8_t amount){
     this->virtual_terminals = (virtual_terminal**)malloc(sizeof(virtual_terminal) * amount);
     this->vt_count = amount;
     for (uint8_t i = 0; i < amount; i++){
+        // Create the VT
         this->virtual_terminals[i] = new virtual_terminal(driver);
+
+        // Start with it deactivated
         this->virtual_terminals[i]->deactivate();
 
-        this->virtual_terminals[i]->write("TTY ", 4);
-        const char *number = toString(i);
+        // Format the identifier string
+        char buffer[24];
+        stringf(buffer, sizeof(buffer), "TTY %d\n\r", i);
 
-        this->virtual_terminals[i]->write((char*)number, strlen(number));
-        this->virtual_terminals[i]->write("\n\r", 2);
+        // Print the identifier
+        this->virtual_terminals[i]->write((char*)buffer, strlen(buffer), false);
+
+        // Create a devfs node for it
+        stringf(buffer, sizeof(buffer), "/tty%d", i);
+
+        line_discipline::register_vt(this->virtual_terminals[i], buffer);
     }
 }
 
