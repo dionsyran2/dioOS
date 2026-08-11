@@ -17,7 +17,8 @@
 #include <rendering/multiplexer.h>
 #include <vfs/vfs.h>
 #include <elf/elf.h>
-
+#include <drivers/filesystems/devfs/devfs.h>
+#include <drivers/ps2/ps2.h>
 
 
 bool no_smp = false; // Do not enable the APs
@@ -212,21 +213,6 @@ char* init_executables[] = {
     nullptr
 };
 
-void start_userspace(){
-    vnode_t *node = vfs::resolve_path("/temp/test");
-
-    task_t *init = task_scheduler::create_process("init", nullptr, true, true);
-
-    char *argp[] = {
-        "/temp/test",
-        nullptr
-    };
-
-    load_elf(init, node, 1, argp, "/temp/test");
-    
-    task_scheduler::mark_as_ready(init);
-}
-
 void dump_fs(int indent, vnode_t *node){
     dentry_t *out;
     size_t count = node->get_listing(out, 0, 1000);
@@ -252,12 +238,35 @@ void dump_fs(int indent, vnode_t *node){
     delete[] out;
 }
 
-#include <drivers/filesystems/devfs/devfs.h>
+void start_userspace(){
+    vnode_t *node = vfs::resolve_path("/bin/sh");
+
+    if (!node) return;
+
+    task_t *init = task_scheduler::create_process("init", nullptr, true, true);
+
+    dentry_t *dentry = devfs::resolve_path_dentry("/tty0");
+    vnode_t *vnode = devfs::resolve_path("/tty0");
+
+    init->fd_table->open_file(dentry, vnode, O_RDWR, 0);
+    init->fd_table->open_file(dentry, vnode, O_RDWR, 1);
+    init->fd_table->open_file(dentry, vnode, O_RDWR, 2);
+
+    dentry->unref();
+    vnode->close();
+
+    char *argp[] = {
+        "/bin/sh",
+        nullptr
+    };
+
+    int r = load_elf(init, node, 1, argp, "/bin/sh");
+    task_scheduler::mark_as_ready(init);
+}
+
 void init_kernel_subsystems(){
     task_t *self = task_scheduler::get_current_task();
-    vnode_t *r = vfs::resolve_path("/");
-    dump_fs(0, r);
-    r->close();
+
 
     // Initialize ACPI
     ACPI::InitializeACPICA();
@@ -267,6 +276,8 @@ void init_kernel_subsystems(){
     start_drivers();
 
     log_memory_usage();
+
+    ps2::initialize_ps2();
 
     start_userspace();
 

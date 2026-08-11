@@ -32,6 +32,19 @@ initfs:
 	cp $(OSDIR)/temp $(OSDIR)/tmp_initfs -r
 
 	mkdir $(OSDIR)/tmp_initfs/bin
+	mkdir $(OSDIR)/tmp_initfs/lib
+	mkdir $(OSDIR)/tmp_initfs/lib/x86_64-dioOS-gnu
+	mkdir $(OSDIR)/tmp_initfs/lib64
+	mkdir $(OSDIR)/tmp_initfs/etc
+
+	cp $(DISKDIR)/bin/* $(OSDIR)/tmp_initfs/bin -r
+	cp $(DISKDIR)/lib/x86_64-dioOS-gnu/ld-linux-x86-64.so.2 $(OSDIR)/tmp_initfs/lib/
+	cp $(DISKDIR)/lib/x86_64-dioOS-gnu/ld-linux-x86-64.so.2 $(OSDIR)/tmp_initfs/lib/x86_64-dioOS-gnu
+	cp $(DISKDIR)/lib/x86_64-dioOS-gnu/ld-linux-x86-64.so.2 $(OSDIR)/tmp_initfs/lib64
+	cp $(DISKDIR)/lib/x86_64-dioOS-gnu/libc* $(OSDIR)/tmp_initfs/lib/x86_64-dioOS-gnu -r
+	cp $(DISKDIR)/lib/x86_64-dioOS-gnu/libm* $(OSDIR)/tmp_initfs/lib/x86_64-dioOS-gnu -r
+	cp $(DISKDIR)/lib/x86_64-dioOS-gnu/libresolv* $(OSDIR)/tmp_initfs/lib/x86_64-dioOS-gnu -r
+	-cp $(DISKDIR)/etc/* $(OSDIR)/tmp_initfs/etc/
 	cd $(OSDIR)/tmp_initfs && tar --format=ustar -cf $(OSDIR)/initfs.tar *
 	rm -rf $(OSDIR)/tmp_initfs
 

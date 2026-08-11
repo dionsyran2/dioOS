@@ -117,6 +117,18 @@ namespace ramfs {
         this->children.unlock();
     }
 
+    void rfs_vnode_t::mklink(const char *name, int inode){
+        rfs_dentry_t *child = new rfs_dentry_t();
+        strncpy(child->name, name, sizeof(child->name) - 1);
+        child->name[sizeof(child->name) - 1] = '\0';
+        child->type = LNK;
+        child->inode = inode;
+
+        this->children.lock();
+        this->children.add(child);
+        this->children.unlock();
+    }
+
     int rfs_vnode_t::unlink(const char *name){
         rfs_dentry_t *child = nullptr;
 

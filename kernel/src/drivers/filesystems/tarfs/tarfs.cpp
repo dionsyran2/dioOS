@@ -2,6 +2,8 @@
 #include <drivers/filesystems/ramfs/ramfs.h>
 #include <vfs/vnode_attributes.h>
 #include <string.h>
+#include <memory.h>
+#include <kstdio.h>
 
 static uint64_t parse_octal(const char *str, size_t size) {
     uint64_t n = 0;
@@ -52,9 +54,10 @@ namespace tarfs {
             }
             strncat(full_path, header->name, sizeof(header->name));
 
+            //serialf("initfs: Creating %s\n\r", full_path);
+
             if (header->typeflag == '\0' || header->typeflag == '0'){
                 /* Its a file */
-
                 int r = vfs::mkfile(full_path, mode);
                 vnode_t *node = vfs::resolve_path(full_path);
 
@@ -78,7 +81,19 @@ namespace tarfs {
                     node->set_attributes(&attrs);
                     node->close();
                 }
+            } else if (header->typeflag == '2') {
+                int len = strlen(full_path);
+                if (full_path[len - 1] == '/'){
+                    full_path[len - 1] = '\0';
+                }
+
+                char linkname[101];
+                memcpy(linkname, header->linkname, 100);
+                linkname[100] = '\0';
+
+                int r = vfs::mklink(full_path, linkname);
             }
+
             offset += 512 + ROUND_UP(payload_size, 512);
         }
     }

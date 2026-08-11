@@ -5,6 +5,7 @@
 struct vnode_t;
 struct dentry_t;
 struct vnode_attributes_t;
+struct poll_table_t;
 
 struct vnode_file_operations_t {
     // @brief Reads up to 'size' bytes starting at 'offset'
@@ -43,6 +44,10 @@ struct vnode_file_operations_t {
     // @brief It creates a directory named 'name' with 'mode' permissions
     // @return Returns 0 on success, < 0 on failure
     int (*mkdir)(vnode_t *node, const char *name, uint16_t mode);
+
+    // @brief It will create a link
+    // @return Returns 0 on success, < 0 on failure
+    int (*mklink)(vnode_t *node, const char *name, const char *linkpath);
 
     // @brief It will try to unlink a children by name
     // @return Returns 0 on success, < 0 on failure

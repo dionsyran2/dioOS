@@ -4,10 +4,22 @@
 #include <vfs/vnode.h>
 #include <vfs/dentry.h>
 
+#define MAX_SYMLINK_DEPTH 32
+
+#define MAY_EXEC  1
+#define MAY_WRITE 2
+#define MAY_READ  4
+
+#define AT_FDCWD -100
+
 namespace vfs{
     void initialize();
     int allocate_filesystem_id();
 
+    vnode_t *resolve_path(const char *path, int intent, int &err, bool follow_symlinks = true, bool follow_trailing = true);
+    dentry_t *resolve_path_dentry(const char *path, int intent, int &err, bool follow_symlinks = true, bool follow_trailing = true);
+    dentry_t *resolve_path_dentry_at(dentry_t *base_dir, const char *path, int intent, int &err, bool follow_symlinks = true, bool follow_trailing = true);
+    
     vnode_t *resolve_path(const char *path);
     dentry_t *resolve_path_dentry(const char *path);
 
@@ -22,4 +34,5 @@ namespace vfs{
     
     int mkdir(const char *path, uint16_t mode);
     int mkfile(const char *path, uint16_t mode);
+    int mklink(const char *path, const char *target);
 }

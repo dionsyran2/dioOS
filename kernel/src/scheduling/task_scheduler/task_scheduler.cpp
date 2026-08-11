@@ -154,6 +154,7 @@ namespace task_scheduler {
             task->registers.cr3 = task->vmm ? task->vmm->get_root_page_table() : global_ptm_cr3;
         }
 
+        local->kernel_stack_top = task->kernel_stack;
         local->user_stack_scratch = task->current_user_stack;
         local->userspace_return_address = task->userspace_return_address;
         write_msr(IA32_FS_BASE, task->fs_pointer);

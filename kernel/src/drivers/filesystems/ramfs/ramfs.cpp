@@ -8,6 +8,19 @@
 
 namespace ramfs {
     extern vnode_file_operations_t operation_table;
+
+    uint32_t convert_type_to_mode(rfs_type_t type){
+        switch (type) {
+            case DIR:
+                return S_IFDIR;
+            case REG:
+                return S_IFREG;
+            case LNK:
+                return S_IFLNK;
+        }
+
+        return 0;
+    }
     
     vnode_t *vfs_fetch_vnode(dentry_t *entry){
         __ramfs *fs = (__ramfs *)entry->fs_data;
@@ -26,7 +39,7 @@ namespace ramfs {
         vnode->nlink = rfs_node->nlink; // hardcoded to 1 static link for now
 
         vnode->attributes = rfs_node->attributes;
-        vnode->attributes.mode = (rfs_node->type == DIR ? S_IFDIR : S_IFREG) | (rfs_node->attributes.mode & 0777);
+        vnode->attributes.mode = convert_type_to_mode(rfs_node->type) | (rfs_node->attributes.mode & 0777);
         
         return vnode;
     }
@@ -122,6 +135,19 @@ namespace ramfs {
         return 0;
     }
 
+    int vfs_mklink(vnode_t *node, const char *name, const char *target){
+        __ramfs *fs = (__ramfs *)node->fs_data;
+        rfs_vnode_t *rnode = fs->get_node(node->inode);
+
+        int inode = fs->allocate_vnode(LNK, 0777);
+        rnode->mklink(name, inode);
+
+        rfs_vnode_t *lnk = fs->get_node(inode);
+        lnk->write(target, strlen(target), 0);
+
+        return 0;
+    }
+
     int vfs_unlink(vnode_t *node, const char *child){
         __ramfs *fs = (__ramfs *)node->fs_data;
         rfs_vnode_t *rnode = fs->get_node(node->inode);
@@ -193,6 +219,7 @@ namespace ramfs {
         .get_listing = vfs_get_listing,
         .creat = vfs_creat,
         .mkdir = vfs_mkdir,
+        .mklink = vfs_mklink,
         .unlink = vfs_unlink,
         .evict_inode = vfs_evict_inode,
     };

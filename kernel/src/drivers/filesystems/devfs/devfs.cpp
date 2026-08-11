@@ -3,6 +3,7 @@
 #include <cstr.h>
 #include <filepath.h>
 #include <kerrno.h>
+#include <math.h>
 
 namespace devfs{
     devfs_entry_t *root = nullptr;
@@ -280,6 +281,18 @@ namespace devfs{
 
         devfs_entry_t *parent_entry = __internal_resolve_path(parent_path);
         if (!parent_entry) return -1; // Parent directory does not exist
+
+        parent_entry->children->lock();
+        for (int i = 0; i < parent_entry->children->size(); i++){
+            devfs_entry_t *entry = parent_entry->children->get(i);
+
+            if (strcmp(name, entry->name)) continue;
+
+            parent_entry->children->unlock();
+            return -EEXIST;
+        }
+
+        parent_entry->children->unlock();
 
         __create_devfs_entry(parent_entry, name, type, operations, ctx);
 

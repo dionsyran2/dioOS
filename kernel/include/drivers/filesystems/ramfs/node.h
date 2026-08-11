@@ -38,6 +38,7 @@ namespace ramfs{
         rfs_dentry_t *lookup(const char *name);
         void creat(const char *name, int inode);
         void mkdir(const char *name, int inode);
+        void mklink(const char *name, int inode);
 
         int unlink(const char *name);
 

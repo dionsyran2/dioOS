@@ -38,6 +38,14 @@ struct ktermios {
 	speed_t c_ospeed;		/* output speed */
 };
 
+struct winsize {
+	unsigned short ws_row;
+	unsigned short ws_col;
+	unsigned short ws_xpixel;
+	unsigned short ws_ypixel;
+};
+
+
 /* c_cc characters */
 #define VINTR 0
 #define VQUIT 1

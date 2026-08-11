@@ -8,6 +8,7 @@
 #include <cpu.h>
 #include <local.h>
 #include <drivers/timers/common.h>
+#include <syscalls/syscalls.h>
 
 int local_cpu_cnt = 0;
 local_apic_t* local_apic_list = nullptr;
@@ -130,6 +131,8 @@ void init_core(){
     setup_gdt();
     
     local_data->interrupt_descriptor_table->load();
+
+    setup_syscalls();
 
     //kprintf("\e[0;32m[CORE]\e[0m Initialized core #%d successfully.\n", local_data->cpu_id);
 }

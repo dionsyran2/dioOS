@@ -15,7 +15,6 @@ mm_struct_t::mm_struct_t(){
     }
 
     _reference_count = 1;
-    
 }
 
 mm_struct_t::~mm_struct_t(){
@@ -38,35 +37,37 @@ uint64_t mm_struct_t::_find_unmapped_area(uint64_t length) {
 
     __m_area_t *current = this->_m_area_list;
 
-    // What if the list is empty? The whole space is free!
     if (current == nullptr) return current_search;
 
-    // Check the gap BEFORE the first VMA
-    if (current_search < current->start) {
+    // Fast-forward past any VMAs that end BEFORE our search base (e.g. executable code at 0x400000)
+    while (current != nullptr && (current->start + current->size) <= current_search) {
+        current = current->next;
+    }
+
+    // Check gap before the first VMA above DEFAULT_VM_MMAP_BASE
+    if (current != nullptr && current_search < current->start) {
         if ((current->start - current_search) >= length) {
             return current_search;
         }
     }
 
-    // Traverse the list looking for gaps between consecutive VMAs
+    // Traverse gaps between consecutive VMAs
     while (current != nullptr) {
-        // Force the search pointer to the end of the current block
         if (current_search < (current->start + current->size)) {
             current_search = current->start + current->size;
         }
 
-        // If there is a next block, check the gap between 'current' and 'next'
         if (current->next != nullptr) {
-            uint64_t gap = current->next->start - current_search;
-            if (gap >= length) {
-                return current_search;
+            if (current->next->start > current_search) {
+                uint64_t gap = current->next->start - current_search;
+                if (gap >= length) {
+                    return current_search;
+                }
             }
         }
         current = current->next;
     }
 
-    // Checked all gaps between VMAs. Place it after the very last VMA.
-    // Ensure we don't overflow into kernel space (0x800000000000)
     if (current_search + length < 0x800000000000) {
         return current_search;
     }
@@ -93,11 +94,32 @@ bool mm_struct_t::is_free(uint64_t start, uint64_t size){
     return true;
 }
 
-void mm_struct_t::_insert_segment(uint64_t start, uint64_t size, uint64_t flags){
+__m_area_t* mm_struct_t::find_vma(uint64_t address) {
+    __m_area_t *current = this->_m_area_list;
+    while (current != nullptr) {
+        if (address >= current->start && address < (current->start + current->size)) {
+            return current;
+        }
+        current = current->next;
+    }
+    return nullptr;
+}
+
+// Make sure to update your header file to match this signature!
+// void _insert_segment(uint64_t start, uint64_t size, uint64_t flags, vnode_t *file = nullptr, uint64_t file_offset = 0);
+
+void mm_struct_t::_insert_segment(uint64_t start, uint64_t size, uint64_t flags, vnode_t *file, uint64_t file_offset) {
     __m_area_t *new_vma = new __m_area_t();
     new_vma->start = start;
     new_vma->size = size;
     new_vma->flags = flags;
+    
+    // --- NEW: File Backing ---
+    new_vma->file = file;
+    new_vma->file_offset = file_offset;
+    
+    if (new_vma->file) new_vma->file->open();
+
     new_vma->next = nullptr;
     new_vma->previous = nullptr;
 
@@ -115,12 +137,10 @@ void mm_struct_t::_insert_segment(uint64_t start, uint64_t size, uint64_t flags)
     }
 
     if (prev == nullptr){
-        // Insert at the head
         new_vma->next = this->_m_area_list;
         this->_m_area_list->previous = new_vma;
         this->_m_area_list = new_vma;
     } else {
-        // Insert somewhere in the middle / end
         new_vma->next = current;
         new_vma->previous = prev;
         prev->next = new_vma;
@@ -128,93 +148,120 @@ void mm_struct_t::_insert_segment(uint64_t start, uint64_t size, uint64_t flags)
     }
 
     this->_merge_vmas();
-    return;
 }
 
-void mm_struct_t::_split_vma(__m_area_t* vma, uint64_t split_address){
+void mm_struct_t::_split_vma(__m_area_t* vma, uint64_t split_address) {
     if (split_address <= vma->start || split_address >= (vma->start + vma->size)) return;
 
-    // Create the right-hand half
     __m_area_t *new_right = new __m_area_t();
     new_right->start = split_address;
     new_right->size = (vma->start + vma->size) - split_address;
     new_right->flags = vma->flags;
 
+    new_right->file = vma->file;
+    new_right->file_offset = vma->file_offset + (split_address - vma->start);
+    
+    if (new_right->file) new_right->file->open(); 
+
     // Modify the left-hand half
     vma->size = split_address - vma->start;
 
-    // Insert the new_right into the list, right after vma
+    // List wiring
     new_right->next = vma->next;
     new_right->previous = vma;
     if (vma->next) vma->next->previous = new_right;
     vma->next = new_right;
 }
 
-void mm_struct_t::_remove_segment(uint64_t start, uint64_t size){
+void mm_struct_t::_remove_segment(uint64_t start, uint64_t size) {
     uint64_t end = start + size;
     __m_area_t *current = this->_m_area_list;
 
-    while (current != nullptr){
-        uint64_t vm_end = current->start + current->size;
-        // If we are past the end of the range, stop
-        if (current->start >= end) break;
-
-        // Check for overlap
-        if (start < vm_end && end > current->start) {
-            // If it starts in the middle of the vma split it
-            if (start > current->start){
-                this->_split_vma(current, start);
-                current = current->next; // Move to the right half
-                continue; // Re-evaluate the overlap on the right half
-            }
-
-            // Does it end in the middle of this vma? split it.
-            if (end < vm_end){
-                this->_split_vma(current, end);
-            }
-
-            // At this point the vma is entirely inside the [start, end] range.
-            // lets free the physical pages
-            for (uint64_t addr = current->start; addr < vm_end; addr += PAGE_SIZE) {
-                uint64_t phys = this->_page_table_manager->getPhysicalAddress((void*)addr);
-                if (phys != 0) {
-                    GlobalAllocator.FreePage((void*)phys);
-                    
-                    this->_page_table_manager->Unmap((void*)addr); 
-                }
-            }
-
-            // Remove the vma from the list
-            __m_area_t *to_delete = current;
-            if (to_delete->previous){
-                to_delete->previous->next = to_delete->next;
-            } else {
-                this->_m_area_list = to_delete->next;
-            }
-
-            if (to_delete->next) to_delete->next->previous = to_delete->previous;
-
-            current = current->next;
-            delete to_delete;
-        } else {
-            current = current->next;
+    // Unmap the physical memory right away for the target area
+    for (uint64_t addr = start; addr < end; addr += PAGE_SIZE) {
+        uint64_t phys = this->_page_table_manager->getPhysicalAddress((void*)addr);
+        if (phys != 0) {
+            GlobalAllocator.DecreaseReferenceCount((void*)phys);
+            this->_page_table_manager->Unmap((void*)addr);
         }
+    }
+
+    while (current != nullptr) {
+        uint64_t vm_end = current->start + current->size;
+        __m_area_t *next_node = current->next; // Save next before modifying the list!
+
+        // If this VMA is completely outside our range, skip it
+        if (vm_end <= start || current->start >= end) {
+            current = next_node;
+            continue;
+        }
+
+        // VMA is completely engulfed by the removal area. Delete it entirely.
+        if (current->start >= start && vm_end <= end) {
+            if (current->previous) current->previous->next = current->next;
+            else this->_m_area_list = current->next;
+            
+            if (current->next) current->next->previous = current->previous;
+            
+            if (current->file) current->file->close();
+            delete current;
+        }
+        // VMA encompasses the removal area entirely (middle split)
+        else if (current->start < start && vm_end > end) {
+            this->_split_vma(current, start);      // Splits into [current->start, start] and [start, vm_end]
+            this->_split_vma(current->next, end);  // Splits the right half into [start, end] and [end, vm_end]
+            
+            // Delete the middle chunk we just isolated
+            __m_area_t *middle = current->next;
+            middle->previous->next = middle->next;
+            if (middle->next) middle->next->previous = middle->previous;
+            
+            if (middle->file) middle->file->close();
+            delete middle;
+        }
+        // Removal overlaps the right edge of the VMA
+        else if (current->start < start && vm_end <= end) {
+            current->size = start - current->start;
+        }
+        // Removal overlaps the left edge of the VMA
+        else if (current->start >= start && vm_end > end) {
+            uint64_t overlap = end - current->start;
+            current->start = end;
+            current->size -= overlap;
+            if (current->file) current->file_offset += overlap;
+        }
+
+        current = next_node; // Safely move to the next node
     }
 }
 
-void mm_struct_t::_merge_vmas(){
+void mm_struct_t::_merge_vmas() {
     __m_area_t *current = this->_m_area_list;
 
     while (current != nullptr && current->next != nullptr){
         __m_area_t *next = current->next;
 
-        // If they touch and have the same permissions
-        if ((current->start + current->size) == next->start && current->flags == next->flags) {
-            // Absorb the next one into the current one
+        // Check if they touch in memory and have the same permissions
+        bool memory_contiguous = ((current->start + current->size) == next->start);
+        bool same_flags = (current->flags == next->flags);
+        
+        // Check if they map the same file
+        bool same_file = (current->file == next->file);
+        
+        // If they are file-backed, check if they are contiguous
+        bool file_contiguous = true; 
+        if (current->file != nullptr) {
+            file_contiguous = ((current->file_offset + current->size) == next->file_offset);
+        }
+
+        // If ALL conditions are met, merge them!
+        if (memory_contiguous && same_flags && same_file && file_contiguous) {
             current->size += next->size;
 
             current->next = next->next;
             if (next->next) next->next->previous = current;
+
+            if (next->file) next->file->close(); // Drop the duplicate reference before deleting
 
             delete next;
         } else {
@@ -222,7 +269,6 @@ void mm_struct_t::_merge_vmas(){
         }
     }
 }
-
 uint64_t mm_struct_t::resolve_physical_address(uint64_t virt){
     return this->_page_table_manager->getPhysicalAddress((void*)virt);
 }
@@ -232,54 +278,100 @@ uint64_t mm_struct_t::get_root_page_table(){
 }
 
 
-void *mm_struct_t::allocate(uint64_t start, uint64_t size, uint64_t flags, int &errno){
-    start = ALIGN_DOWN(start, PAGE_SIZE);
+void *mm_struct_t::mmap(uint64_t start, uint64_t size, uint64_t vm_flags, vnode_t* file, uint64_t file_offset, int &errno) {
     size = ALIGN(size, PAGE_SIZE);
-
+    
     uint64_t irq_flags = spin_lock(&this->_lock);
 
-    if (!this->is_free(start, size)){
-        errno = EADDRINUSE; // Not the correct thing to return... but i don't know anything more fitting.
-        return nullptr;
+    if (vm_flags & VM_FIXED) {
+        if (start == 0 || (start % PAGE_SIZE != 0)) {
+            spin_unlock(&this->_lock, irq_flags);
+            errno = EINVAL;
+            return nullptr;
+        }
+
+        if (!this->is_free(start, size)) {
+            this->_remove_segment(start, size);
+        }
+    } else {
+        start = ALIGN_DOWN(start, PAGE_SIZE);
+
+        if (start == 0 || !this->is_free(start, size)) {
+            start = this->_find_unmapped_area(size);
+            if (start == 0) {
+                spin_unlock(&this->_lock, irq_flags);
+                errno = ENOMEM;
+                return nullptr;
+            }
+        }
     }
 
-    this->_insert_segment(start, size, flags);
+    this->_insert_segment(start, size, vm_flags, file, file_offset);
     
-    for (size_t offset = 0; offset < size; offset += 0x1000) {
-        void *page = GlobalAllocator.RequestPage();
-
-        uint64_t physical = virtual_to_physical((uint64_t)page);
-        this->_page_table_manager->MapMemory((void*)(start + offset), (void*)physical, flags & 0xfff0000000000fff /* transfer only the PTM flags */);
-    }
-
     spin_unlock(&this->_lock, irq_flags);
-    
     errno = 0;
-
     return (void *)start;
 }
 
-void *mm_struct_t::allocate(uint64_t size, uint64_t flags, int &errno){
-    size = ALIGN(size, PAGE_SIZE);
+void *mm_struct_t::mmap(uint64_t size, uint64_t flags, vnode_t* file, uint64_t file_offset, int &errno){
+    return mmap(0, size, flags, file, file_offset, errno);
+}
 
-    flags |= (1 << Present);
+
+int mm_struct_t::mprotect(uint64_t start, uint64_t size, uint64_t prot_flags) {
+    start = ALIGN_DOWN(start, PAGE_SIZE);
+    size = ALIGN(size, PAGE_SIZE);
+    uint64_t end = start + size;
 
     uint64_t irq_flags = spin_lock(&this->_lock);
+    
+    __m_area_t *current = this->_m_area_list;
 
-    uint64_t start = this->_find_unmapped_area(size);
-    
-    this->_insert_segment(start, size, flags);
-    
-    for (size_t offset = 0; offset < size; offset += 0x1000) {
-        void *page = GlobalAllocator.RequestPage();
-        uint64_t physical = virtual_to_physical((uint64_t)page);
-        this->_page_table_manager->MapMemory((void*)(start + offset), (void*)physical, flags & 0xfff0000000000fff /* transfer only the PTM flags */);
+    while (current != nullptr) {
+        uint64_t vm_end = current->start + current->size;
+        
+        if (current->start < start && vm_end > start) {
+            this->_split_vma(current, start);
+        }
+        
+        if (current->start < end && vm_end > end) {
+            this->_split_vma(current, end);
+        }
+        
+        current = current->next;
     }
 
+    // Apply protections
+    current = this->_m_area_list;
+    while (current != nullptr) {
+        // If this VMA is inside our target range
+        if (current->start >= start && (current->start + current->size) <= end) {
+            
+            // Clear old protections, apply the new ones
+            current->flags = (current->flags & ~(VM_READ | VM_WRITE | VM_EXEC)) | prot_flags;
+            
+            // Re-map hardware page tables to reflect new flags!
+            for (uint64_t addr = current->start; addr < current->start + current->size; addr += PAGE_SIZE) {
+                uint64_t phys = this->_page_table_manager->getPhysicalAddress((void*)addr);
+                
+                if (phys != 0) { // If it's already paged in
+                    uint64_t pt_flags = (1ULL << PT_Flag::User) | (1ULL << PT_Flag::Present);
+                    if (current->flags & VM_WRITE) pt_flags |= (1ULL << PT_Flag::Write);
+                    if (!(current->flags & VM_EXEC)) pt_flags |= (1ULL << PT_Flag::NX);
+                    
+                    this->_page_table_manager->MapMemory((void*)addr, (void*)phys, pt_flags);
+                }
+            }
+        }
+        current = current->next;
+    }
+
+    // Merge any VMAs that now share identical flags and boundaries!
+    this->_merge_vmas(); 
+    
     spin_unlock(&this->_lock, irq_flags);
 
-    errno = 0;
-    return (void *)start;
+    return 0;
 }
 
 void mm_struct_t::free(uint64_t start, uint64_t size, int &errno){
@@ -316,4 +408,63 @@ void mm_struct_t::close(){
         this->destroy_address_space();
         delete this;
     }
+}
+
+bool mm_struct_t::handle_page_fault(uint64_t address, uint64_t error_code, bool kernel_override){
+    task_t *self = task_scheduler::get_current_task();
+    if (self->saved_fpu_state) save_fpu_state(self->saved_fpu_state);
+
+    address &= ~0xFFFUL;
+    __m_area_t *vma = this->find_vma(address);
+
+    if (vma == nullptr) return false;
+
+    bool is_write_fault = error_code & 0x2;
+    bool is_exec_fault  = error_code & 0x10;
+
+    // Reject writes to read-only memory
+    if (is_write_fault && !(vma->flags & VM_WRITE) && !kernel_override) {
+        return false;
+    }
+
+    // Reject execution in non-executable memory
+    if (is_exec_fault && !(vma->flags & VM_EXEC)) {
+        return false; 
+    }
+
+    // Translate VM flags to Hardware Page Table Flags
+    uint64_t pt_flags = (1ULL << PT_Flag::User) | (1ULL << PT_Flag::Present);
+    if (vma->flags & VM_WRITE) pt_flags |= (1ULL << PT_Flag::Write);
+    if (!(vma->flags & VM_EXEC)) pt_flags |= (1ULL << PT_Flag::NX);
+
+    uint64_t existing_phys = this->_page_table_manager->getPhysicalAddress((void*)address);
+    if (existing_phys != 0) {
+        // Update the flags?
+        this->_page_table_manager->MapMemory((void*)address, (void*)existing_phys, pt_flags);
+        
+        if (self->saved_fpu_state) restore_fpu_state(self->saved_fpu_state);
+        return true;
+    }
+
+    // Demand Allocate the Physical Page
+    void* page = GlobalAllocator.RequestPage();
+    memset(page, 0, PAGE_SIZE);
+
+    if (vma->file != nullptr) {
+        uint64_t page_offset_in_vma = address - vma->start;
+        uint64_t exact_file_offset = vma->file_offset + page_offset_in_vma;
+        uint64_t file_size = vma->file->size;
+        
+        if (exact_file_offset < file_size) {
+            uint64_t bytes_to_read = min((uint64_t)PAGE_SIZE, file_size - exact_file_offset);
+            vma->file->read(page, bytes_to_read, exact_file_offset);
+        }
+    }
+
+    this->_page_table_manager->MapMemory((void*)address, (void*)virtual_to_physical((uint64_t)page), pt_flags);
+    
+    // Always flush the TLB when introducing a new mapping
+
+    if (self->saved_fpu_state) restore_fpu_state(self->saved_fpu_state);
+    return true;
 }

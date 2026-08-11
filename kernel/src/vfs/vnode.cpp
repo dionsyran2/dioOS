@@ -129,6 +129,26 @@ int vnode_t::mkdir(const char *name, uint16_t mode){
     return r;
 }
 
+int vnode_t::mklink(const char *name, const char *linkpath){
+    if (!S_ISDIR(this->attributes.mode)) return -ENOTDIR;
+
+    if (!this->operations || !this->operations->mklink) return -EROFS;
+
+    dentry_t *lookup = this->lookup(name);
+    if (lookup){
+        delete lookup; // Because this is an out-of-cache reference we have to delete it
+        return -EEXIST;
+    }
+    
+    this->klock.lock();
+    
+    int r = this->operations->mklink(this, name, linkpath);
+    
+    this->klock.unlock();
+
+    return r;
+}
+
 int vnode_t::poll(int events, poll_table_t *pt){
     if (!this->operations || !this->operations->poll) return -EOPNOTSUPP;
 

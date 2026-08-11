@@ -19,7 +19,6 @@ class serial_port : public tty_device_t {
     void handle_interrupt();
 
     serial_port(uint16_t address, uint8_t irq);
-
 };
 
 void serialf(const char* str, ...);

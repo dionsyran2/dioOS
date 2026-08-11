@@ -45,8 +45,10 @@ struct vnode_t {
     int set_attributes(vnode_attributes_t *attrs);
     dentry_t *lookup(const char *name);
     int get_listing(dentry_t *&out, size_t offset, size_t limit);
+
     int creat(const char *name, uint16_t mode);
     int mkdir(const char *name, uint16_t mode);
+    int mklink(const char *target, const char *linkpath);
 
     int poll(int events, poll_table_t *pt);
 

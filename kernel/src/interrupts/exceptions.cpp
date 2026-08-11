@@ -91,60 +91,14 @@ void PageFault(isr_exception_info_t* info){
     uint64_t address;
     __asm__ volatile ("mov %%cr2, %0" : "=r" (address));
 
-    uint64_t rsp;
-    __asm__ volatile ("mov %%rsp, %0" : "=r" (rsp));
+    uint64_t errorCode = info->error_code;
     
-    //task_t* self = task_scheduler::get_current_task();
+    task_t *self = task_scheduler::get_current_task();
 
-    /*if (self){
-        // AAAAAAAAAAAAAHHH, NEVER MODIFY THE DAMN FPU... I HAVE BEEN CHASING THIS BUG FOR 2 DAYS
-        save_fpu_state(self->saved_fpu_state);
+    if (self && self->vmm){
+        if (self->vmm->handle_page_fault(address, errorCode)) return;
+    }
 
-        uint64_t pg = address & ~0xFFFUL;
-        int flags = self->vm_tracker->get_flags(pg);
-        if (flags & VM_PENDING_COW == 0) goto continue_pf_exception;
-
-        uint64_t physical = self->ptm->getPhysicalAddress((void*)pg);
-        if (!physical) goto continue_pf_exception;
-
-        // Allocate a new page
-        void* page = GlobalAllocator.RequestPage();
-        if (!page) goto continue_pf_exception;
-
-        // Copy the data
-        memcpy(page, (void*)physical_to_virtual(physical), PAGE_SIZE);
-
-        // Remove old reference
-        GlobalAllocator.DecreaseReferenceCount((void*)physical);
-
-        // Map the new page
-        uint64_t new_physical = virtual_to_physical((uint64_t)page);
-        self->ptm->MapMemory((void*)pg, (void*)new_physical);
-
-        // Add flags
-        if (flags & VM_FLAG_RW)
-            self->ptm->SetFlag((void*)pg, PT_Flag::Write, true);
-
-        if (flags & VM_FLAG_NX)
-            self->ptm->SetFlag((void*)pg, PT_Flag::NX, true);
-        
-        if (flags & VM_FLAG_CD)
-            self->ptm->SetFlag((void*)pg, PT_Flag::CacheDisable, true);
-        
-        if (flags & VM_FLAG_WT)
-            self->ptm->SetFlag((void*)pg, PT_Flag::WriteThrough, true);
-        
-        self->ptm->SetFlag((void*)pg, PT_Flag::User, true);
-
-        // Remove the pending flag
-        self->vm_tracker->set_flags(pg, PAGE_SIZE, flags & ~VM_PENDING_COW);
-
-        restore_fpu_state(self->saved_fpu_state);
-        // Return execution
-        return;
-    }*/
-
-continue_pf_exception:
     #ifdef EXIT_ON_EXCEPTION 
         if (self){
             self->exit(SIGSEGV);
@@ -152,13 +106,9 @@ continue_pf_exception:
     #endif
 
     send_ipi(HALT_EXEC_INTERRUPT_VECTOR, 0, OTHERS);
-    PageTableManager* ptm = &globalPTM;
-    //if (self && self->ptm) ptm = self->ptm;
-
 
     log_registers(false, info);
     dump_stack_trace((stack_frame_t*)info->rbp);
-    uint64_t errorCode = info->error_code;
     uint8_t p = errorCode & 0b00000001;
     uint8_t w = (errorCode >> 1) & 0b00000001;
     uint8_t u = (errorCode >> 2) & 0b00000001;
@@ -169,7 +119,7 @@ continue_pf_exception:
     uint8_t SGX = (errorCode >> 15) & 0b00000001;
 
     cpu_local_data *local = get_cpu_local_data();
-    panic("Page Fault!\nFault Address: %p\nFlags:\n\e[0;33m%s%s%s%s%s%s%s%s\e[0m\nPaging Raw Value: %p\n",
+    panic("Page Fault!\nFault Address: %p\nFlags:\n\e[0;33m%s%s%s%s%s%s%s%s\e[0m\n",
         address,
         p ? "Page Protection Violation\n" : "Non-Present Page\n",
         w ? "Write Access\n" : "Read Access\n",
@@ -178,8 +128,7 @@ continue_pf_exception:
         i && p ? "Instruction Fetch while NX is set\n" : "",
         pk  && p  ? "Protection-Key violation\n" : "",
         ss  && p  ? "Shadow Stack access\n" : "",
-        SGX && p  ? "SGX violation\n" : "",
-        ptm->getMapping((void*)address)
+        SGX && p  ? "SGX violation\n" : ""
     );
 }
 

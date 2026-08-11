@@ -7,11 +7,11 @@
 #include <scheduling/task_scheduler/cpu_task_queue.h>
 #include <structures/trees/avl_tree.h>
 #include <memory/vmm.h>
+#include <scheduling/task_scheduler/file_descriptors.h>
 
 // Forward Declaration
 struct mm_struct_t;
 struct cpu_task_queue_t;
-
 
 
 struct poll_table_t {
@@ -51,14 +51,20 @@ struct task_t {
     pid_t pid; // Process id
     tid_t tgid; // Thread group id
 
-    sid_t sid; // Session ID
-    gid_t gid; // Group ID (The user group)
-    uid_t uid; // User ID
+    sid_t sid = 0; // Session ID
+
+    gid_t rgid = 0; // Real Group ID (The user group)
+    uid_t ruid = 0; // Real User ID
+
+    gid_t egid = 0; // Effective Group ID
+    uid_t euid = 0; // Effective User ID
+
+    gid_t sgid = 0; // Saved Group ID
+    uid_t suid = 0; // Saved User ID
 
     bool is_userspace; // Whether this task should run on userspace
 
-    /* STACKS (NOTE: This points to the top of the stacks!) */
-    // Stacks only for userspace tasks:
+    /* STACKS (NOTE: These point to the top of the stacks!) */
     __stack_t userspace_stack; // The stack to be used for userspace (mapped at a specific address)
     __stack_t syscall_stack; // The stack to be used for syscalls
 
@@ -69,13 +75,20 @@ struct task_t {
     /* Memory */
     mm_struct_t *vmm = nullptr;
 
+    /* Files */
+    fd_table_t *fd_table;
+
     /* Execution stuff */
     function task_entry_point;
 
     __registers_t registers;
+    __registers_t *syscall_registers; // A pointer to the user registers    
     uint64_t fs_pointer;
 
     void *saved_fpu_state;
+
+    /* Sync stuff */
+    int* clear_child_tid;    // Pointer to userspace TID address
 
     /* Syscall Execution Stuff */
     uint64_t userspace_return_address; // Saves the return address of the syscall
@@ -99,8 +112,9 @@ struct task_t {
     void block();
     void block(uint64_t deadline, kstd::avl_tree_t<task_t*> *block_list);
     
-    int read_from_userspace(void *kbuffer, void *uaddress, size_t size);
-    int write_to_userspace(void *uaddress, void *kbuffer, size_t size);
+    int read_from_userspace(void *kbuffer, const void *uaddress, size_t size);
+    int write_to_userspace(void *uaddress, const void *kbuffer, size_t size);
+    char *read_string(const char *uaddress);
 
     void unblock();
 

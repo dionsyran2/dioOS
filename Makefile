@@ -8,7 +8,7 @@ SETUPDIR := $(OSDIR)/setup
 DISKDIR := $(OSDIR)/disk/
 TMPDIR := $(OSDIR)/setup/tmp
 DISK_SIZE_MB=4096
-ESP_SIZE_MB=64
+ESP_SIZE_MB=1024
 
 
 BOOTEFI := $(BOOTDIR)/BOOTX64.EFI
@@ -90,7 +90,7 @@ cleanall:
 run:
 	qemu-system-x86_64 \
 	-machine q35 \
-	-m 4G \
+	-m 8G \
 	-smp cores=8 \
 	-cpu max \
 	-drive file=$(DISK) \

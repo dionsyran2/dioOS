@@ -37,6 +37,7 @@ struct __attribute__((packed)) cpu_local_data {
     uint64_t time_in_kernel;
     uint64_t update_tick_count;
 
+    uint64_t kernel_stack_top;
     uint64_t user_stack_scratch;
 
     // Chain

@@ -14,6 +14,7 @@ namespace ramfs{
         REG,
         DEV,
         SOCK,
+        LNK,
     };
     
     struct rfs_vnode_t;

@@ -11,6 +11,7 @@
 #include <structures/trees/avl_tree.h>
 #include <kerrno.h>
 #include <signum.h>
+#include <vfs/vnode.h>
 
 // Initializes the fpu state buffer
 void _init_task_fpu(task_t* task) {
@@ -36,10 +37,6 @@ task_t::task_t(function entry, pid_t pid, tid_t tgid, bool is_userspace){
     this->tgid = tgid;
     this->is_userspace = is_userspace;
 
-    this->sid = 0;
-    this->gid = 0;
-    this->uid = 0;
-
     this->kernel_stack = ((uint64_t)GlobalAllocator.RequestPage()) + PAGE_SIZE;
 
     if (is_userspace){
@@ -48,7 +45,11 @@ task_t::task_t(function entry, pid_t pid, tid_t tgid, bool is_userspace){
         this->syscall_stack = ((uint64_t)GlobalAllocator.RequestPage()) + PAGE_SIZE;
         
         int errno = 0;
-        this->userspace_stack = (uint64_t)vmm->allocate(DEFAULT_STACK_SIZE, User, errno) + DEFAULT_STACK_SIZE;
+        this->userspace_stack = (uint64_t)vmm->mmap(0x7FFFFFFF000 - DEFAULT_STACK_SIZE, DEFAULT_STACK_SIZE, VM_WRITE, nullptr, 0, errno) + DEFAULT_STACK_SIZE;
+
+        this->fd_table = new fd_table_t();
+        this->fd_table->open();
+        this->fd_table->cwd = vfs::resolve_path_dentry("/");
     }
 
     this->saved_fpu_state = GlobalAllocator.RequestPages(DIV_ROUND_UP(g_fpu_storage_size, PAGE_SIZE));
@@ -62,6 +63,15 @@ task_t::task_t(function entry, pid_t pid, tid_t tgid, bool is_userspace){
 // Here we should prepare for exit... and clean up a couple of stuff!
 void task_t::exit(int exit_code){
     this->current_state = ZOMBIE;
+
+    if (this->clear_child_tid != nullptr) {
+        
+        int zero = 0;
+        
+        this->write_to_userspace(this->clear_child_tid, &zero, sizeof(int));
+        
+        //futex_wake_address(this->clear_child_tid, 1);
+    }
 
     if (task_scheduler::get_current_task() == this){
         task_scheduler::swap_tasks(); // Exit is only called while this is running (by itself)
@@ -117,15 +127,32 @@ void task_t::unblock(){
     this->cpu_queue->push(this);
 }
 
-int task_t::read_from_userspace(void *kbuffer, void *uaddress, size_t size){
+int task_t::read_from_userspace(void *kbuffer, const void *uaddress, size_t size){
     if (!this->vmm) return -EFAULT;
+    if (size == 0) return 0;
+
+    uintptr_t start = (uintptr_t)uaddress;
+    uintptr_t end = start + size;
 
     uint64_t current_cr3 = 0;
     uint64_t task_cr3 = this->vmm->get_root_page_table();
     asm volatile ("mov %%cr3, %0" : "=r" (current_cr3));
-
-    if (current_cr3 != task_cr3){
+    if (current_cr3 != task_cr3) {
         asm volatile ("mov %0, %%cr3" :: "r" (task_cr3));
+    }
+
+    uintptr_t curr_page = ALIGN_DOWN(start, PAGE_SIZE);
+    while (curr_page < end) {
+        uint64_t phys = this->vmm->resolve_physical_address(curr_page);
+        
+        if (phys == 0) {
+            bool success = this->vmm->handle_page_fault(curr_page, 0x0, true);
+            if (!success) {
+                if (current_cr3 != task_cr3) asm volatile ("mov %0, %%cr3" :: "r" (current_cr3));
+                return -EFAULT;
+            }
+        }
+        curr_page += PAGE_SIZE;
     }
 
     memcpy(kbuffer, uaddress, size);
@@ -137,17 +164,36 @@ int task_t::read_from_userspace(void *kbuffer, void *uaddress, size_t size){
     return 0;
 }
 
-int task_t::write_to_userspace(void *uaddress, void *kbuffer, size_t size){
+int task_t::write_to_userspace(void *uaddress, const void *kbuffer, size_t size){
     if (!this->vmm) return -EFAULT;
+    if (size == 0) return 0;
 
+    uint64_t start = (uint64_t)uaddress;
+    uint64_t end = start + size;
+
+    // Switch to the target task's page table so we can inspect/map its memory
     uint64_t current_cr3 = 0;
     uint64_t task_cr3 = this->vmm->get_root_page_table();
     asm volatile ("mov %%cr3, %0" : "=r" (current_cr3));
-
-    if (current_cr3 != task_cr3){
+    if (current_cr3 != task_cr3) {
         asm volatile ("mov %0, %%cr3" :: "r" (task_cr3));
     }
 
+    uint64_t curr_page = ALIGN_DOWN(start, PAGE_SIZE);
+    while (curr_page < end) {
+        uint64_t phys = this->vmm->resolve_physical_address(curr_page);
+        
+        if (phys == 0) {
+            bool success = this->vmm->handle_page_fault(curr_page, 0x2, true);
+            if (!success) {
+                if (current_cr3 != task_cr3) asm volatile ("mov %0, %%cr3" :: "r" (current_cr3));
+                return -EFAULT;
+            }
+        }
+        curr_page += PAGE_SIZE;
+    }
+
+    // Now that all pages are guaranteed to be mapped and present, safe to copy!
     memcpy(uaddress, kbuffer, size);
 
     if (current_cr3 != task_cr3){
@@ -155,4 +201,60 @@ int task_t::write_to_userspace(void *uaddress, void *kbuffer, size_t size){
     }
 
     return 0;
+}
+
+char *task_t::read_string(const char *uaddress){
+    if (!this->vmm) return nullptr;
+
+    uint64_t current_cr3 = 0;
+    uint64_t task_cr3 = this->vmm->get_root_page_table();
+    asm volatile ("mov %%cr3, %0" : "=r" (current_cr3));
+    if (current_cr3 != task_cr3) {
+        asm volatile ("mov %0, %%cr3" :: "r" (task_cr3));
+    }
+
+    size_t length = 0;
+    bool found_null = false;
+    const char *p = uaddress;
+
+    while (length < 1024) {
+        uintptr_t page = ALIGN_DOWN((uintptr_t)p, PAGE_SIZE);
+        uint64_t phys = this->vmm->resolve_physical_address(page);
+        
+        if (phys == 0) {
+            bool success = this->vmm->handle_page_fault(page, 0x0, true);
+            if (!success) {
+                if (current_cr3 != task_cr3) asm volatile ("mov %0, %%cr3" :: "r" (current_cr3));
+                return nullptr;
+            }
+        }
+
+        if (*p == '\0') {
+            found_null = true;
+            break;
+        }
+
+        p++;
+        length++;
+    }
+
+    if (!found_null) {
+        if (current_cr3 != task_cr3) asm volatile ("mov %0, %%cr3" :: "r" (current_cr3));
+        return nullptr;
+    }
+
+    char *buffer = (char *)malloc(length + 1);
+    if (!buffer) {
+        if (current_cr3 != task_cr3) asm volatile ("mov %0, %%cr3" :: "r" (current_cr3));
+        return nullptr;
+    }
+
+    memcpy(buffer, uaddress, length);
+    buffer[length] = '\0';
+
+    if (current_cr3 != task_cr3){
+        asm volatile ("mov %0, %%cr3" :: "r" (current_cr3));
+    }
+
+    return buffer;
 }

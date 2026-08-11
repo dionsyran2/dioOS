@@ -4,7 +4,9 @@
 #include <kerrno.h>
 #include <elf/hwcap.h>
 #include <alloca.h>
-
+#include <memory.h>
+#include <paging/PageFrameAllocator.h>
+#include <random.h>
 
 const char ELF_MAGIC[] = {0x7f, 'E', 'L', 'F'};
 
@@ -93,14 +95,19 @@ bool verify_header(elf64_ehdr* hdr){
 }
 
 void load_pheader(task_t *task, vnode_t *node, program_header64 *pheader, uint64_t base){
-    uint64_t flags = (1ULL << PT_Flag::User) | (1ULL << PT_Flag::Present);
-    if (pheader->p_flags & PF_W) flags |= (1ULL << PT_Flag::Write);
+    uint64_t flags = VM_FIXED | VM_ANON;
+    if (pheader->p_flags & PF_W) flags |= VM_WRITE;
+    if (pheader->p_flags & PF_X) flags |= VM_EXEC;
 
     uint64_t load_addr = base + pheader->p_vaddr;
-    int errno;
     
-    // Allocate the non-contiguous physical pages in the VMM
-    task->vmm->allocate(load_addr, pheader->p_memsz, flags, errno);
+    // 1. Calculate the exact page boundaries to prevent under-allocation
+    uint64_t start_page = ALIGN_DOWN(load_addr, PAGE_SIZE);
+    uint64_t end_page = ALIGN(load_addr + pheader->p_memsz, PAGE_SIZE);
+    uint64_t total_alloc_size = end_page - start_page;
+
+    int errno;
+    task->vmm->mmap(start_page, total_alloc_size, flags, nullptr, 0, errno);
 
     // Stream the data from the file to userspace in 4KB chunks
     char *buffer = new char[4096];
@@ -131,7 +138,16 @@ void load_pheader(task_t *task, vnode_t *node, program_header64 *pheader, uint64
         }
     }
 
-    delete buffer;
+    // Fix the C++ array deletion bug
+    delete[] buffer;
+
+    // Ensure the heap starts on a fresh page boundary
+    uint64_t final_address = base + pheader->p_vaddr + pheader->p_memsz;
+    uint64_t aligned_brk = ALIGN(final_address, PAGE_SIZE);
+    
+    if (task->vmm->initial_brk < aligned_brk){
+        task->vmm->initial_brk = task->vmm->current_brk = aligned_brk;
+    } 
 }
 
 int load_elf(task_t *task, vnode_t *node, int argc, char *argv[], const char *exec_path){
@@ -151,6 +167,12 @@ int load_elf(task_t *task, vnode_t *node, int argc, char *argv[], const char *ex
     char parent_path[512];
     split_path(exec_path, parent_path, task->name);
 
+    uint64_t exec_base = 0;
+    if (header->e_type == 3 /* ET_DYN */) {
+        // It's a PIE binary.
+        exec_base = 0x400000; 
+    }
+
     // Allocate the program headers
     program_header64 *phdrs = new program_header64[header->e_phnum];
 
@@ -163,7 +185,7 @@ int load_elf(task_t *task, vnode_t *node, int argc, char *argv[], const char *ex
 
     for (int i = 0; i < header->e_phnum; i++) {
         if (phdrs[i].p_type == PT_LOAD) {
-            load_pheader(task, node, &phdrs[i], 0);
+            load_pheader(task, node, &phdrs[i], exec_base);
         } else if (phdrs[i].p_type == PT_INTERP) {
             interpreter_found = true;
             node->read(interp_path, phdrs[i].p_filesz, phdrs[i].p_offset);
@@ -172,7 +194,7 @@ int load_elf(task_t *task, vnode_t *node, int argc, char *argv[], const char *ex
 
     delete phdrs;
 
-    uint64_t entry_point = header->e_entry;
+    uint64_t entry_point = exec_base + header->e_entry;
 
     // Load the interpreter
     if (interpreter_found){
@@ -216,8 +238,13 @@ int load_elf(task_t *task, vnode_t *node, int argc, char *argv[], const char *ex
         interpreter->close();
     }
 
-    uint64_t phdr_vaddr = header->e_phoff;
-    uint8_t random_bytes[16] = {0};
+    uint64_t phdr_vaddr = exec_base + header->e_phoff;
+    uint8_t random_bytes[16] = { 0 };
+
+    for (int i = 0; i < 16; i++){
+        random_bytes[i] = random(UINT8_MAX);
+    }
+
     task->registers.rsp = task->userspace_stack;
     task->registers.rsp -= 16;
     task->write_to_userspace((void*)task->registers.rsp, random_bytes, 16);
@@ -236,11 +263,11 @@ int load_elf(task_t *task, vnode_t *node, int argc, char *argv[], const char *ex
         {AT_PHNUM, header->e_phnum},
         {AT_BASE, 0x100000000000},
         {AT_FLAGS, 0},
-        {AT_ENTRY, header->e_entry},
-        /*{AT_UID, (uint64_t)task->ruid},
+        {AT_ENTRY, exec_base + header->e_entry},
+        {AT_UID, (uint64_t)task->ruid},
         {AT_EUID, (uint64_t)task->euid},
         {AT_GID, (uint64_t)task->rgid},
-        {AT_EGID, (uint64_t)task->egid},*/
+        {AT_EGID, (uint64_t)task->egid},
         {AT_SECURE, 0},
         {AT_RANDOM, at_random_ptr},
         {AT_EXECFN, at_execfn_ptr},

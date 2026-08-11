@@ -3,8 +3,9 @@
 #include <stddef.h>
 
 #include <scheduling/spinlock/spinlock.h>
-#include <scheduling/task_scheduler/task_scheduler.h>
 #include <structures/lists/linked_list.h>
+
+struct task_t;
 
 struct mutex_t {
     spinlock_t spinlock = 0;

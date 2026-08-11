@@ -1,4 +1,5 @@
 #include <scheduling/mutex/mutex.h>
+#include <scheduling/task_scheduler/task_scheduler.h>
 #include <kerrno.h>
 
 bool mutex_t::lock(uint64_t timeout_ms) {

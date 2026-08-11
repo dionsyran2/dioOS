@@ -8,6 +8,7 @@ namespace line_discipline{
     extern devfs_ops_t vt_devfs_ops; // forward reference for the operations
 
     void input_handler(char chr, void *ctx);
+    void input_handler_evdev(evdev_t* evdev, input_event *event, void *context);
 
     void register_vt(tty_device_t *vt, const char* filename){
         __ld_vt_info *ctx = new __ld_vt_info;
@@ -29,6 +30,7 @@ namespace line_discipline{
 
         vt->input_handler_ctx = ctx;
         vt->input_handler = input_handler;
+        vt->input_handler_evdev = input_handler_evdev;
 
         devfs::mknod(filename, DEVFS_CHR, &vt_devfs_ops, ctx);
     }
@@ -54,7 +56,7 @@ namespace line_discipline{
             return;
         }
 
-        if (chr == '\r' && (ctx->termios_state.c_iflag & ICRNL)) {
+        if (chr == '\r' /*&& (ctx->termios_state.c_iflag & ICRNL)*/) {
             chr = '\n';
         }
 
@@ -80,6 +82,159 @@ namespace line_discipline{
             // Wake up any threads blocked in sys_poll
             ctx->wake_poll_list(POLLIN);
         }
+    }
+
+    void input_handler_evdev(evdev_t* evdev, input_event *event, void *context) {
+        __ld_vt_info *ctx = (__ld_vt_info*)context;
+
+        if (event->type != EV_KEY) return;
+
+        uint16_t code = event->code;
+        int value = event->value; // 0 = Release, 1 = Press, 2 = Repeat
+
+        if (code == KEY_LEFTSHIFT || code == KEY_RIGHTSHIFT) {
+            ctx->shift_held = (value != 0);
+            return;
+        }
+        if (code == KEY_LEFTCTRL || code == KEY_RIGHTCTRL) {
+            ctx->ctrl_held = (value != 0);
+            return;
+        }
+
+        if (value == 0) return;
+
+        if (value == 1) {
+            bool led_changed = false;
+            
+            if (code == KEY_CAPSLOCK) {
+                ctx->caps_lock = !ctx->caps_lock;
+                led_changed = true;
+            } else if (code == KEY_NUMLOCK) {
+                ctx->num_lock = !ctx->num_lock;
+                led_changed = true;
+            } else if (code == KEY_SCROLLLOCK) {
+                ctx->scroll_lock = !ctx->scroll_lock;
+                led_changed = true;
+            }
+
+            if (led_changed) {
+                input_event led_ev;
+                led_ev.time = event->time;
+                led_ev.type = EV_LED;
+                
+                if (code == KEY_CAPSLOCK) led_ev.code = LED_CAPSL;
+                else if (code == KEY_NUMLOCK) led_ev.code = LED_NUML;
+                else if (code == KEY_SCROLLLOCK) led_ev.code = LED_SCROLL;
+                
+                led_ev.value = (code == KEY_CAPSLOCK) ? ctx->caps_lock :
+                            (code == KEY_NUMLOCK) ? ctx->num_lock : ctx->scroll_lock;
+                            
+                evdev->write(&led_ev, sizeof(input_event));
+            }
+            
+            if (led_changed) return; 
+        }
+
+        char chr = 0;
+
+        // --- NUMPAD HANDLING ---
+        bool is_numpad = (code >= KEY_KP7 && code <= KEY_KPDOT) || 
+                        code == KEY_KPENTER || code == KEY_KPSLASH || 
+                        code == KEY_KPEQUAL || code == KEY_KPMINUS || 
+                        code == KEY_KPPLUS || code == KEY_KPASTERISK;
+
+        if (is_numpad) {
+            // Operators are unaffected by Num Lock
+            if (code == KEY_KPMINUS) chr = '-';
+            else if (code == KEY_KPPLUS) chr = '+';
+            else if (code == KEY_KPASTERISK) chr = '*';
+            else if (code == KEY_KPSLASH) chr = '/';
+            else if (code == KEY_KPEQUAL) chr = '=';
+            else if (code == KEY_KPENTER) chr = '\n';
+            else {
+                // Numpad Numbers vs Navigation (XOR logic)
+                bool type_numbers = ctx->num_lock != ctx->shift_held;
+
+                if (type_numbers) {
+                    switch(code) {
+                        case KEY_KP7: chr = '7'; break;
+                        case KEY_KP8: chr = '8'; break;
+                        case KEY_KP9: chr = '9'; break;
+                        case KEY_KP4: chr = '4'; break;
+                        case KEY_KP5: chr = '5'; break;
+                        case KEY_KP6: chr = '6'; break;
+                        case KEY_KP1: chr = '1'; break;
+                        case KEY_KP2: chr = '2'; break;
+                        case KEY_KP3: chr = '3'; break;
+                        case KEY_KP0: chr = '0'; break;
+                        case KEY_KPDOT: chr = '.'; break;
+                    }
+                } else {
+                    // Navigation mode: Send ANSI escape sequences to the terminal
+                    const char *seq = nullptr;
+                    switch(code) {
+                        case KEY_KP8: seq = "\e[A"; break;  // Up
+                        case KEY_KP2: seq = "\e[B"; break;  // Down
+                        case KEY_KP6: seq = "\e[C"; break;  // Right
+                        case KEY_KP4: seq = "\e[D"; break;  // Left
+                        case KEY_KP7: seq = "\e[H"; break;  // Home
+                        case KEY_KP1: seq = "\e[F"; break;  // End
+                        case KEY_KP9: seq = "\e[5~"; break; // PgUp
+                        case KEY_KP3: seq = "\e[6~"; break; // PgDn
+                        case KEY_KP0: seq = "\e[2~"; break; // Insert
+                        case KEY_KPDOT: seq = "\e[3~"; break; // Delete
+                    }
+                    
+                    if (seq) {
+                        // Feed the sequence into the line discipline one byte at a time
+                        for (int i = 0; seq[i] != '\0'; i++) {
+                            input_handler(seq[i], context);
+                        }
+                    }
+                    return;
+                }
+            }
+        } else {
+            const char *seq = nullptr;
+            switch(code) {
+                case KEY_UP:       seq = "\e[A"; break;
+                case KEY_DOWN:     seq = "\e[B"; break;
+                case KEY_RIGHT:    seq = "\e[C"; break;
+                case KEY_LEFT:     seq = "\e[D"; break;
+                case KEY_HOME:     seq = "\e[H"; break;
+                case KEY_END:      seq = "\e[F"; break;
+                case KEY_PAGEUP:   seq = "\e[5~"; break;
+                case KEY_PAGEDOWN: seq = "\e[6~"; break;
+                case KEY_INSERT:   seq = "\e[2~"; break;
+                case KEY_DELETE:   seq = "\e[3~"; break;
+            }
+            
+            if (seq) {
+                for (int i = 0; seq[i] != '\0'; i++) {
+                    input_handler(seq[i], context);
+                }
+                return;
+            }
+            
+            if (code >= 128) return;
+
+            bool use_upper = ctx->shift_held;
+            
+            bool is_letter = (keymap_lower[code] >= 'a' && keymap_lower[code] <= 'z');
+            if (ctx->caps_lock && is_letter) {
+                use_upper = !use_upper;
+            }
+
+            chr = use_upper ? keymap_upper[code] : keymap_lower[code];
+        }
+
+        if (chr == 0) return;
+
+        if (ctx->ctrl_held && chr >= 'a' && chr <= 'z') {
+            chr = chr - 'a' + 1; 
+        }
+
+        input_handler(chr, context);
     }
 
     // devfs Stuff
@@ -243,20 +398,37 @@ namespace line_discipline{
 
     int vt_dev_ioctl(void *context, int op, char* argp){
         __ld_vt_info *ctx = (__ld_vt_info*)context;
+        task_t *self = task_scheduler::get_current_task();
         if (!ctx || !argp) return -EINVAL;
 
         switch (op) {
             case TCGETS: {
                 // Copy kernel's current termios state back to userspace
-                memcpy(argp, &ctx->termios_state, sizeof(termios));
+                if (self) {
+                    self->write_to_userspace(argp, &ctx->termios_state, sizeof(termios));
+                } else {
+                    memcpy(argp, &ctx->termios_state, sizeof(termios));
+                }
                 return 0;
             }
             case TCSETS: {
                 // Copy new termios state from userspace
-                memcpy(&ctx->termios_state, argp, sizeof(termios));
+                if (self) {
+                    self->read_from_userspace(&ctx->termios_state, argp, sizeof(termios));
+                } else {
+                    memcpy(argp, &ctx->termios_state, sizeof(termios));
+                }
                 
                 // Tell the hw to update (Baud rate, parity, etc.)
                 ctx->vt->apply_termios(&ctx->termios_state);
+                return 0;
+            }
+            case TIOCGWINSZ: {
+                if (self) {
+                    self->write_to_userspace(argp, &ctx->vt->ws, sizeof(struct winsize));
+                } else {
+                    memcpy(argp, &ctx->vt->ws, sizeof(struct winsize));
+                }
                 return 0;
             }
             default:

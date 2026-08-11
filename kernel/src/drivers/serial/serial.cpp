@@ -97,6 +97,11 @@ serial_port::serial_port(uint16_t port, uint8_t irq){
 
     // ARM THE UART to fire interrupts on new data!
     outb(port + 1, 0x01); // Enable RBR Interrupts
+
+    ws.ws_row = 25;
+    ws.ws_col = 80;
+    ws.ws_xpixel = 0;
+    ws.ws_ypixel = 0;
 }
 
 void serial_port::handle_interrupt(){
