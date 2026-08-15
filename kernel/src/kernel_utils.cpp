@@ -239,7 +239,7 @@ void dump_fs(int indent, vnode_t *node){
 }
 
 void start_userspace(){
-    vnode_t *node = vfs::resolve_path("/bin/sh");
+    vnode_t *node = vfs::resolve_path("/temp/sig");
 
     if (!node) return;
 
@@ -264,9 +264,9 @@ void start_userspace(){
     task_scheduler::mark_as_ready(init);
 }
 
+
 void init_kernel_subsystems(){
     task_t *self = task_scheduler::get_current_task();
-
 
     // Initialize ACPI
     ACPI::InitializeACPICA();

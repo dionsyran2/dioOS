@@ -60,6 +60,10 @@ task_t::task_t(function entry, pid_t pid, tid_t tgid, bool is_userspace){
     this->counter = DEFAULT_COUNTER_VALUE;
 }
 
+namespace task_scheduler {
+    extern kstd::avl_tree_t<task_t *> task_search_tree;
+}
+
 // Here we should prepare for exit... and clean up a couple of stuff!
 void task_t::exit(int exit_code){
     this->current_state = ZOMBIE;
@@ -73,6 +77,9 @@ void task_t::exit(int exit_code){
         //futex_wake_address(this->clear_child_tid, 1);
     }
 
+    // Should be done only if deleting / clearing
+    task_scheduler::task_search_tree.remove(this->pid);
+    
     if (task_scheduler::get_current_task() == this){
         task_scheduler::swap_tasks(); // Exit is only called while this is running (by itself)
                                       // But you never know
@@ -257,4 +264,77 @@ char *task_t::read_string(const char *uaddress){
     }
 
     return buffer;
+}
+
+bool task_t::check_pending_signals() {
+    uint64_t deliverable = this->pending_signals & (~this->blocked_signals);
+    if (!deliverable) return false;
+
+    int signum = ffsl(deliverable) -1;
+
+    this->pending_signals &= ~(1UL << signum);
+
+    this->deliver_signal(signum);
+    return true;
+}
+
+
+#define SIG_DFL ((void (*)(int))0)
+#define SIG_IGN ((void (*)(int))1)
+
+void task_t::deliver_signal(int signum) {
+    sigaction action = this->signal_actions[signum];
+    
+    if (action.sa_handler == SIG_IGN) return;
+    if (action.sa_handler == SIG_DFL) {
+        this->exit(-signum); // Does not return
+    }
+
+    // Calculate a new rsp
+    uint64_t user_rsp = this->registers.rsp - 128; // start beyond the red zone
+    uint64_t rsi = this->registers.rsi;
+
+    if (action.sa_flags & SA_SIGINFO){
+        siginfo_t siginfo = {
+            .si_signo = signum,
+            /* ... */  
+        };
+
+        user_rsp -= sizeof(siginfo_t);
+        rsi = user_rsp;
+
+        this->write_to_userspace((void*)user_rsp, &siginfo, sizeof(siginfo_t));
+    }
+    
+    user_rsp -= sizeof(__registers_t);
+    user_rsp &= ~0xFUL;
+
+    // Push the old register state
+    this->write_to_userspace((void*)user_rsp, &this->registers, sizeof(__registers_t));
+
+    // Push the sa_restorer address
+    if (action.sa_restorer) {
+        user_rsp -= sizeof(uint64_t);
+        this->write_to_userspace((void*)user_rsp, &action.sa_restorer, sizeof(uint64_t));
+    }
+
+    this->registers.rdi = signum;
+    this->registers.rsi = rsi;
+    this->registers.rsp = user_rsp;
+    this->registers.rip = (uint64_t)action.sa_handler;
+}
+
+namespace task_scheduler {
+    extern void __run_task(task_t *task);
+}
+
+void task_t::restore_signal(){
+    uint64_t saved_state = this->registers.rsp;
+    __registers_t regs;
+
+    this->read_from_userspace(&regs, (void*)saved_state, sizeof(__registers_t));
+
+    this->registers = regs;
+
+    task_scheduler::__run_task(this);
 }

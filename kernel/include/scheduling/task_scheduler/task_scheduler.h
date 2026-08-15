@@ -8,11 +8,11 @@
 #include <structures/trees/avl_tree.h>
 #include <memory/vmm.h>
 #include <scheduling/task_scheduler/file_descriptors.h>
+#include <bits/signals.h>
 
 // Forward Declaration
 struct mm_struct_t;
 struct cpu_task_queue_t;
-
 
 struct poll_table_t {
     void (*callback)(poll_table_t *pt);
@@ -43,6 +43,7 @@ enum __task_state {
     INTERRUPTABLE,
     ZOMBIE, /* Its dead (it has exited)*/
 };
+
 
 struct task_t {
     /* Task Information */
@@ -90,6 +91,11 @@ struct task_t {
     /* Sync stuff */
     int* clear_child_tid;    // Pointer to userspace TID address
 
+    /* Signals */
+    uint64_t pending_signals = 0;
+    uint64_t blocked_signals = 0;
+    sigaction signal_actions[NSIG];
+    
     /* Syscall Execution Stuff */
     uint64_t userspace_return_address; // Saves the return address of the syscall
     uint64_t current_user_stack; // Saves the return stack of the syscall
@@ -119,6 +125,10 @@ struct task_t {
     void unblock();
 
     void exit(int exit_code);
+
+    bool check_pending_signals();
+    void deliver_signal(int signum);
+    void restore_signal();
 };
 
 namespace task_scheduler {
@@ -127,6 +137,7 @@ namespace task_scheduler {
     // methods
     task_t *get_current_task(); // It will return the current running task (self)
     
+    task_t *search_by_pid(pid_t pid);
     task_t *create_process(const char *name, function entry, bool userspace, bool init = false);
     void mark_as_ready(task_t *task);
     void initialize_core();

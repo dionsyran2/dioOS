@@ -542,3 +542,13 @@ size_t decode_utf8(const char* str, uint32_t* codepoint) {
     // UNREACHABLE
     return 0;
 }
+
+int ffsl(long int value){
+    long int temp = value;
+    for (int i = 0; i < (sizeof(long int) * 8); i++){
+        if (temp & 1) return i + 1;
+        temp >= 1;
+    }
+
+    return 0;
+}

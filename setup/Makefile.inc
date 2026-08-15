@@ -21,13 +21,13 @@ LIBGCC_PATH := $(shell $(CROSS_GCC) -print-file-name=libgcc_s.so.1)
 
 
 initfs:
-	mkdir $(OSDIR)/tmp_initfs
+	-mkdir $(OSDIR)/tmp_initfs
 	# Make the /dev and /proc folders
-	mkdir $(OSDIR)/tmp_initfs/dev
-	mkdir $(OSDIR)/tmp_initfs/proc
+	-mkdir $(OSDIR)/tmp_initfs/dev
+	-mkdir $(OSDIR)/tmp_initfs/proc
 	
 	# Copy the necessary files
-	mkdir $(OSDIR)/tmp_initfs/fonts
+	-mkdir $(OSDIR)/tmp_initfs/fonts
 	cp $(DISKDIR)/fonts/* $(OSDIR)/tmp_initfs/fonts
 	cp $(OSDIR)/temp $(OSDIR)/tmp_initfs -r
 

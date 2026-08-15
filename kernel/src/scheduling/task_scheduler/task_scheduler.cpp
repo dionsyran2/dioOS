@@ -97,11 +97,16 @@ namespace task_scheduler {
         return local->current_task;
     }
 
+    task_t *search_by_pid(pid_t pid){
+        return task_search_tree.search(pid);
+    }
+
     task_t *create_process(const char *name, function entry, bool userspace, bool init){
         pid_t pid = init ? 1 : __atomic_fetch_add(&current_pid, 1, __ATOMIC_SEQ_CST);
         task_t *r = new task_t(entry, pid, pid, userspace);
 
         strncpy(r->name, name, sizeof(r->name));
+        task_search_tree.insert(pid, r);
 
         return r;
     }
@@ -112,6 +117,8 @@ namespace task_scheduler {
     }
 
     [[noreturn]] void __run_task(task_t *task){
+        task->check_pending_signals();
+        
         cpu_local_data* local = get_cpu_local_data();
 
         bool has_run = task->current_state != NOT_STARTED;

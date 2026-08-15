@@ -12,9 +12,10 @@
 #define SYS_mmap            9
 #define SYS_mprotect        10
 #define SYS_munmap          11
-
 #define SYS_brk             12
-
+#define SYS_sigaction       13
+#define SYS_sigprocmask     14
+#define SYS_sigreturn       15
 #define SYS_ioctl           16
 #define SYS_pread64         17
 
@@ -25,6 +26,8 @@
 #define SYS_getpid          39
 
 #define SYS_exit            60
+
+#define SYS_kill            62
 
 #define SYS_uname           63
 

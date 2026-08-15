@@ -59,3 +59,4 @@ const char* toString(double value, uint8_t decimalPlaces = 2);
 int stringf(char* buffer, size_t buffer_size, const char* format, ...);
 
 size_t decode_utf8(const char* str, uint32_t* codepoint);
+int ffsl(long int value);

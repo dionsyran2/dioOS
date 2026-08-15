@@ -21,7 +21,7 @@ extern "C" uint64_t handle_syscall(__registers_t* registers){
 
     syscall_function entry = find_syscall(registers->rax);
     if (entry == nullptr){
-        serialf("\e[0;31m[SYSCALL] (%d) #%d(%d, %d, %d, %d, %d, %d)\e[0m\n", self->pid, registers->rax, registers->rdi, 
+        serialf("\e[0;31m[SYSCALL] (%d) #%d(%d, %d, %d, %d, %d, %d)\e[0m\n\r", self->pid, registers->rax, registers->rdi, 
             registers->rsi, registers->rdx, registers->r10, registers->r8, registers->r9);
         
         registers->rax = -ENOSYS;
@@ -66,6 +66,22 @@ extern "C" uint64_t handle_syscall(__registers_t* registers){
     /********************************************/
     
     registers->rax = ret;
+
+    asm ("cli");
+
+    if (self->pending_signals & ~self->blocked_signals) {
+        registers->rip = registers->rcx;
+        registers->rflags = registers->r11;
+
+        memcpy(&self->registers, registers, sizeof(__registers_t));
+
+        if (!self->check_pending_signals()) return ret;
+
+        self->registers.r11 = self->registers.rflags;
+        self->registers.rcx = self->registers.rip;
+        memcpy(registers, &self->registers, sizeof(__registers_t));
+    }
+    
     return ret;
 }
 
