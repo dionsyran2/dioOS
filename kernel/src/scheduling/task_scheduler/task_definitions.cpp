@@ -10,7 +10,6 @@
 #include <drivers/serial/serial.h>
 #include <structures/trees/avl_tree.h>
 #include <kerrno.h>
-#include <signum.h>
 #include <vfs/vnode.h>
 
 // Initializes the fpu state buffer
@@ -28,7 +27,6 @@ void _init_task_fpu(task_t* task) {
     // Set the MXCSR (SSE Control/Status) at offset 24 (0x18)
     uint32_t* mxcsr = (uint32_t*)((uint8_t*)task->saved_fpu_state + 24);
     *mxcsr = 0x1F80;
-
 }
 
 task_t::task_t(function entry, pid_t pid, tid_t tgid, bool is_userspace){
@@ -52,7 +50,6 @@ task_t::task_t(function entry, pid_t pid, tid_t tgid, bool is_userspace){
         this->fd_table->cwd = vfs::resolve_path_dentry("/");
     }
 
-    this->saved_fpu_state = GlobalAllocator.RequestPages(DIV_ROUND_UP(g_fpu_storage_size, PAGE_SIZE));
     _init_task_fpu(this);
 
     this->current_state = NOT_STARTED;
@@ -62,6 +59,8 @@ task_t::task_t(function entry, pid_t pid, tid_t tgid, bool is_userspace){
 
 namespace task_scheduler {
     extern kstd::avl_tree_t<task_t *> task_search_tree;
+    extern kstd::linked_list_t<task_t *> pending_cleanup;
+    extern task_t *cleanup_task;
 }
 
 // Here we should prepare for exit... and clean up a couple of stuff!
@@ -77,8 +76,15 @@ void task_t::exit(int exit_code){
         //futex_wake_address(this->clear_child_tid, 1);
     }
 
-    // Should be done only if deleting / clearing
-    task_scheduler::task_search_tree.remove(this->pid);
+    this->exit_code = exit_code;
+    
+    serialf("%d exit %d\n", this->pid, exit_code);
+
+    task_scheduler::pending_cleanup.lock();
+    task_scheduler::pending_cleanup.add(this);
+    task_scheduler::pending_cleanup.unlock();
+
+    task_scheduler::cleanup_task->unblock();
     
     if (task_scheduler::get_current_task() == this){
         task_scheduler::swap_tasks(); // Exit is only called while this is running (by itself)
@@ -270,7 +276,7 @@ bool task_t::check_pending_signals() {
     uint64_t deliverable = this->pending_signals & (~this->blocked_signals);
     if (!deliverable) return false;
 
-    int signum = ffsl(deliverable) -1;
+    int signum = __builtin_ffsll(deliverable) -1;
 
     this->pending_signals &= ~(1UL << signum);
 
@@ -282,14 +288,34 @@ bool task_t::check_pending_signals() {
 #define SIG_DFL ((void (*)(int))0)
 #define SIG_IGN ((void (*)(int))1)
 
+// Clear any zombie children if configured to do so
+void sigcld_avl_cb(task_t *task, void *ctx){
+    int ppid = (uint64_t)ctx;
+
+    if (ppid == task->ppid && task->current_state == ZOMBIE){
+        uint64_t rflags = spin_lock(&task->cleanup_lock); // Ensure the cleanup task finished
+        set_cpu_flags(rflags);
+        
+        task_scheduler::task_search_tree.remove(task->pid);
+        delete task;
+    }
+}
+
 void task_t::deliver_signal(int signum) {
     sigaction action = this->signal_actions[signum];
     
-    if (action.sa_handler == SIG_IGN) return;
-    if (action.sa_handler == SIG_DFL) {
-        this->exit(-signum); // Does not return
+    // If the signum is sigchld, and sa_nocldwait is set, delete the task
+    if (signum == SIGCHLD && (action.sa_flags & SA_NOCLDWAIT)){
+        task_scheduler::task_search_tree.inorder(sigcld_avl_cb, (void*)this->pid);
     }
 
+    if (action.sa_handler == SIG_IGN) return;
+    if (action.sa_handler == SIG_DFL) {
+        if (signum == SIGCHLD || signum == SIGURG) return; // DFLT IGNORE
+
+        // Add termination/core-dump/stop/continue
+        this->exit(-signum); // Does not return
+    }
     // Calculate a new rsp
     uint64_t user_rsp = this->registers.rsp - 128; // start beyond the red zone
     uint64_t rsi = this->registers.rsi;
@@ -328,6 +354,7 @@ namespace task_scheduler {
     extern void __run_task(task_t *task);
 }
 
+
 void task_t::restore_signal(){
     uint64_t saved_state = this->registers.rsp;
     __registers_t regs;
@@ -337,4 +364,9 @@ void task_t::restore_signal(){
     this->registers = regs;
 
     task_scheduler::__run_task(this);
+}
+
+void task_t::signal(int signum){
+    this->pending_signals |= (1UL << signum);
+    if (this->current_state == BLOCKED || this->current_state == INTERRUPTABLE) this->unblock();
 }

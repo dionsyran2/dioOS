@@ -8,7 +8,6 @@
 #include <local.h>
 #include <drivers/timers/common.h>
 #include <drivers/serial/serial.h>
-#include <signum.h>
 #include <memory/heap.h>
 #include <panic.h>
 #include <structures/trees/avl_tree.h>
@@ -21,6 +20,10 @@ namespace task_scheduler {
     kstd::avl_tree_t<task_t *> task_search_tree;
     kstd::avl_tree_t<task_t *> timed_block_list;
     kstd::linked_list_t<task_t *> pending_unblock;
+    kstd::linked_list_t<task_t *> pending_cleanup;
+
+    task_t *cleanup_task = nullptr;
+
     spinlock_t timed_block_list_lock = 0;
     uint64_t last_block_list_check;
 
@@ -38,7 +41,7 @@ namespace task_scheduler {
 
     // Forward declaration
     task_t *create_process(const char *name, function entry, bool userspace, bool init);
-
+    void task_cleaner();
 
     // Initialize the scheduler for the local core
     void initialize_core(){
@@ -58,6 +61,11 @@ namespace task_scheduler {
 
         // Create the idle task!!!!!!!
         local->idle_task = create_process("sched_idle", idle, false);
+
+        if (cleanup_task == nullptr) {
+            cleanup_task = create_process("sched_cleanup_thread", task_cleaner, false, false);
+            mark_as_ready(cleanup_task);
+        }
     }
 
 
@@ -111,13 +119,47 @@ namespace task_scheduler {
         return r;
     }
 
+    task_t *clone(uint64_t flags, uint64_t rsp, __registers_t *registers){
+        task_t *parent = task_scheduler::get_current_task();
+        
+        task_t *child = create_process(parent->name, (function)registers->rip, true, false);
+        child->ppid = parent->pid;
+
+        memcpy(child->saved_fpu_state, parent->saved_fpu_state, g_fpu_storage_size);
+
+        child->fd_table->close();
+        if (flags & CLONE_FILES) {
+            child->fd_table = parent->fd_table;
+            parent->fd_table->open();
+        } else {
+            child->fd_table = parent->fd_table->clone();
+        }
+
+        if (flags & CLONE_VM) {
+            child->vmm = parent->vmm;
+            child->vmm->open();
+        } else {
+            child->vmm = parent->vmm->fork();
+        }
+
+        memcpy(&child->registers, registers, sizeof(__registers_t));
+        child->registers.rax = 0;
+        child->fs_pointer = parent->fs_pointer;
+
+        if (rsp != 0) {
+            child->registers.rsp = rsp;
+        }
+
+        return child;
+    }
+
     // Forcibly causes a scheduler tick & swaps task
     void swap_tasks(){
         asm ("sti; int $0xFD");
     }
 
     [[noreturn]] void __run_task(task_t *task){
-        task->check_pending_signals();
+        if (!task->is_executing_syscall) task->check_pending_signals();
         
         cpu_local_data* local = get_cpu_local_data();
 
@@ -261,7 +303,7 @@ namespace task_scheduler {
         __run_task(next);
     }
 
-    void _sched_block_list_check_cb(task_t *task){
+    void _sched_block_list_check_cb(task_t *task, void*){
         // We should not unblock
         if (task->block_deadline > time_since_boot) return;
         
@@ -290,7 +332,7 @@ namespace task_scheduler {
             uint64_t rflags = spin_lock(&timed_block_list_lock);
 
             pending_unblock.lock();
-            timed_block_list.inorder(_sched_block_list_check_cb);
+            timed_block_list.inorder(_sched_block_list_check_cb, nullptr);
 
             spin_unlock(&timed_block_list_lock, rflags);
         

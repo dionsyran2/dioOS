@@ -5,7 +5,8 @@ int kill(int pid, int signum) {
     if (pid > 0){
         task_t *victim = task_scheduler::search_by_pid(pid);
         if (!victim) return -ESRCH;
-        victim->pending_signals |= (1UL << signum);
+        
+        victim->signal(signum);
     }
 
     /*

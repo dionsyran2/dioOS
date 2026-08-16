@@ -36,7 +36,7 @@ class fd_table_t {
 
     void open();
     void close();
-
+    fd_table_t *clone();
 
     int allocate_fd(file_t *file);
     int open_file(int dirfd, const char *filename, uint16_t flags, int mode, int fd = -1);

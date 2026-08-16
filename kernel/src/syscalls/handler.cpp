@@ -16,6 +16,7 @@ syscall_function find_syscall(int id){
 
 extern "C" uint64_t handle_syscall(__registers_t* registers){
     task_t* self = task_scheduler::get_current_task();
+    self->is_executing_syscall = true;
     self->syscall_registers = registers;
     self->userspace_return_address = registers->rip;
 
@@ -27,6 +28,8 @@ extern "C" uint64_t handle_syscall(__registers_t* registers){
         registers->rax = -ENOSYS;
         return -ENOSYS;
     }
+
+    serialf("%d | ", registers->rax);
 
     unsigned long ret = entry(registers->rdi, registers->rsi, registers->rdx,
         registers->r10, registers->r8, registers->r9);
@@ -82,6 +85,7 @@ extern "C" uint64_t handle_syscall(__registers_t* registers){
         memcpy(registers, &self->registers, sizeof(__registers_t));
     }
     
+    self->is_executing_syscall = false;
     return ret;
 }
 

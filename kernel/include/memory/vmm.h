@@ -48,6 +48,8 @@ class mm_struct_t{
 
     uint64_t get_vm_size();
 
+    mm_struct_t* fork();
+
     bool handle_page_fault(uint64_t address, uint64_t error_code, bool kernel_override = false);
 
     // Shared vm state

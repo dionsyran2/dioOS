@@ -234,15 +234,15 @@ namespace kstd {
             }
         }
 
-        void _inorder_recursive(avl_node_t<T> *node, void (*cb)(T)){
+        void _inorder_recursive(avl_node_t<T> *node, void (*cb)(T, void *), void *ctx){
             if (node->get_left_child()){
-                _inorder_recursive(node->get_left_child(), cb);
+                _inorder_recursive(node->get_left_child(), cb, ctx);
             }
 
-            cb(node->data);
+            cb(node->data, ctx);
 
             if (node->get_right_child()){
-                _inorder_recursive(node->get_right_child(), cb);
+                _inorder_recursive(node->get_right_child(), cb, ctx);
             }
         }
 
@@ -337,8 +337,8 @@ namespace kstd {
             return best_match ? best_match->data : nullptr;
         }
 
-        void inorder(void (*cb)(T)){
-            if (this->root) this->_inorder_recursive(this->root, cb);
+        void inorder(void (*cb)(T, void *), void *ctx){
+            if (this->root) this->_inorder_recursive(this->root, cb, ctx);
         }
 
 

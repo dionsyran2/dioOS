@@ -281,11 +281,11 @@ uint64_t mm_struct_t::get_root_page_table(){
 void *mm_struct_t::mmap(uint64_t start, uint64_t size, uint64_t vm_flags, vnode_t* file, uint64_t file_offset, int &errno) {
     size = ALIGN(size, PAGE_SIZE);
     
-    uint64_t irq_flags = spin_lock(&this->_lock);
+    uint64_t rflags = spin_lock(&this->_lock);
 
     if (vm_flags & VM_FIXED) {
         if (start == 0 || (start % PAGE_SIZE != 0)) {
-            spin_unlock(&this->_lock, irq_flags);
+            spin_unlock(&this->_lock, rflags);
             errno = EINVAL;
             return nullptr;
         }
@@ -299,7 +299,7 @@ void *mm_struct_t::mmap(uint64_t start, uint64_t size, uint64_t vm_flags, vnode_
         if (start == 0 || !this->is_free(start, size)) {
             start = this->_find_unmapped_area(size);
             if (start == 0) {
-                spin_unlock(&this->_lock, irq_flags);
+                spin_unlock(&this->_lock, rflags);
                 errno = ENOMEM;
                 return nullptr;
             }
@@ -308,7 +308,7 @@ void *mm_struct_t::mmap(uint64_t start, uint64_t size, uint64_t vm_flags, vnode_
 
     this->_insert_segment(start, size, vm_flags, file, file_offset);
     
-    spin_unlock(&this->_lock, irq_flags);
+    spin_unlock(&this->_lock, rflags);
     errno = 0;
     return (void *)start;
 }
@@ -323,7 +323,7 @@ int mm_struct_t::mprotect(uint64_t start, uint64_t size, uint64_t prot_flags) {
     size = ALIGN(size, PAGE_SIZE);
     uint64_t end = start + size;
 
-    uint64_t irq_flags = spin_lock(&this->_lock);
+    uint64_t rflags = spin_lock(&this->_lock);
     
     __m_area_t *current = this->_m_area_list;
 
@@ -369,7 +369,7 @@ int mm_struct_t::mprotect(uint64_t start, uint64_t size, uint64_t prot_flags) {
     // Merge any VMAs that now share identical flags and boundaries!
     this->_merge_vmas(); 
     
-    spin_unlock(&this->_lock, irq_flags);
+    spin_unlock(&this->_lock, rflags);
 
     return 0;
 }
@@ -378,11 +378,11 @@ void mm_struct_t::free(uint64_t start, uint64_t size, int &errno){
     start = ALIGN_DOWN(start, PAGE_SIZE);
     size = ALIGN(size, PAGE_SIZE);
 
-    uint64_t irq_flags = spin_lock(&this->_lock);
+    uint64_t rflags = spin_lock(&this->_lock);
 
     this->_remove_segment(start, size);
     
-    spin_unlock(&this->_lock, irq_flags);
+    spin_unlock(&this->_lock, rflags);
     errno = 0;
 }
 
@@ -394,6 +394,46 @@ void mm_struct_t::destroy_address_space(){
 
 uint64_t mm_struct_t::get_vm_size(){
     return this->_vm_size;
+}
+
+mm_struct_t* mm_struct_t::fork(){
+    mm_struct_t *ret = new mm_struct_t();
+    ret->open();
+
+    uint64_t rflags = spin_lock(&this->_lock);
+
+    __m_area_t *current = this->_m_area_list;
+
+    while (current != nullptr){
+        int errno = 0;
+        ret->mmap(current->start, current->size, current->flags, current->file, current->file_offset, errno);
+
+        __m_area_t *new_vma = ret->find_vma(current->start);
+
+        if (!new_vma) continue;
+
+        for (uint64_t addr = new_vma->start; addr < new_vma->start + new_vma->size; addr += PAGE_SIZE) {
+            
+            uint64_t parent_phys = this->_page_table_manager->getPhysicalAddress((void*)addr);
+            
+            if (parent_phys != 0) { 
+                GlobalAllocator.IncreaseReferenceCount((void*)parent_phys);
+
+                uint64_t cow_pt_flags = (1ULL << PT_Flag::User) | (1ULL << PT_Flag::Present);
+                if (!(new_vma->flags & VM_EXEC)) cow_pt_flags |= (1ULL << PT_Flag::NX);
+
+                this->_page_table_manager->MapMemory((void*)addr, (void*)parent_phys, cow_pt_flags);
+
+                ret->_page_table_manager->MapMemory((void*)addr, (void*)parent_phys, cow_pt_flags);
+            }
+        }
+
+        current = current->next;
+    }
+
+    spin_unlock(&this->_lock, rflags);
+
+    return ret;
 }
 
 // Shared vm state
@@ -422,7 +462,7 @@ bool mm_struct_t::handle_page_fault(uint64_t address, uint64_t error_code, bool 
     bool is_write_fault = error_code & 0x2;
     bool is_exec_fault  = error_code & 0x10;
 
-    // Reject writes to read-only memory
+    // Reject writes to logically read-only memory
     if (is_write_fault && !(vma->flags & VM_WRITE) && !kernel_override) {
         return false;
     }
@@ -438,15 +478,37 @@ bool mm_struct_t::handle_page_fault(uint64_t address, uint64_t error_code, bool 
     if (!(vma->flags & VM_EXEC)) pt_flags |= (1ULL << PT_Flag::NX);
 
     uint64_t existing_phys = this->_page_table_manager->getPhysicalAddress((void*)address);
+    
     if (existing_phys != 0) {
-        // Update the flags?
+        // Copy on write resolution
+        
+        // If it's a write fault, but the VMA says we are allowed to write, 
+        // it means the hardware write-bit was stripped during fork()!
+        if (is_write_fault && (vma->flags & VM_WRITE)) {
+            // Allocate a new private page
+            void* new_page = GlobalAllocator.RequestPage();
+            
+            // Copy the data from the old shared page to the new private page
+            memcpy(new_page, (void*)address, PAGE_SIZE); 
+            
+            // Drop our reference to the shared page
+            GlobalAllocator.DecreaseReferenceCount((void*)existing_phys);
+            
+            // Update our local variable to point to the new private physical frame
+            existing_phys = virtual_to_physical((uint64_t)new_page);
+        }
+
+        // If it was a CoW fault, pt_flags now correctly includes PT_Flag::Write, 
+        // unlocking the page for future writes!
         this->_page_table_manager->MapMemory((void*)address, (void*)existing_phys, pt_flags);
         
         if (self->saved_fpu_state) restore_fpu_state(self->saved_fpu_state);
         return true;
     }
 
-    // Demand Allocate the Physical Page
+    // --- DEMAND PAGING (Unloaded Files / Anonymous Memory) ---
+    // If the page wasn't mapped during fork, we end up here.
+    
     void* page = GlobalAllocator.RequestPage();
     memset(page, 0, PAGE_SIZE);
 
@@ -463,8 +525,6 @@ bool mm_struct_t::handle_page_fault(uint64_t address, uint64_t error_code, bool 
 
     this->_page_table_manager->MapMemory((void*)address, (void*)virtual_to_physical((uint64_t)page), pt_flags);
     
-    // Always flush the TLB when introducing a new mapping
-
     if (self->saved_fpu_state) restore_fpu_state(self->saved_fpu_state);
     return true;
 }

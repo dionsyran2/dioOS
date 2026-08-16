@@ -7,7 +7,6 @@
 #include <memory.h>
 #include <scheduling/apic/lapic.h>
 #include <CONFIG.h>
-#include <signum.h>
 
 struct stack_frame_t {
     struct stack_frame_t* rbp;
@@ -119,7 +118,7 @@ void PageFault(isr_exception_info_t* info){
     uint8_t SGX = (errorCode >> 15) & 0b00000001;
 
     cpu_local_data *local = get_cpu_local_data();
-    panic("Page Fault!\nFault Address: %p\nFlags:\n\e[0;33m%s%s%s%s%s%s%s%s\e[0m\n",
+    panic("Page Fault!\nFault Address: %p\nFlags:\n\e[0;33m%s%s%s%s%s%s%s%s\e[0m\npid: %d\n",
         address,
         p ? "Page Protection Violation\n" : "Non-Present Page\n",
         w ? "Write Access\n" : "Read Access\n",
@@ -128,7 +127,8 @@ void PageFault(isr_exception_info_t* info){
         i && p ? "Instruction Fetch while NX is set\n" : "",
         pk  && p  ? "Protection-Key violation\n" : "",
         ss  && p  ? "Shadow Stack access\n" : "",
-        SGX && p  ? "SGX violation\n" : ""
+        SGX && p  ? "SGX violation\n" : "",
+        self ? self->pid : -1
     );
 }
 

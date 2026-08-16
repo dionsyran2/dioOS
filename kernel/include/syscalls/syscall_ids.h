@@ -25,6 +25,9 @@
 
 #define SYS_getpid          39
 
+#define SYS_fork            57
+#define SYS_vfork           58
+
 #define SYS_exit            60
 
 #define SYS_kill            62

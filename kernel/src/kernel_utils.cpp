@@ -239,7 +239,7 @@ void dump_fs(int indent, vnode_t *node){
 }
 
 void start_userspace(){
-    vnode_t *node = vfs::resolve_path("/temp/sig");
+    vnode_t *node = vfs::resolve_path("/temp/clone");
 
     if (!node) return;
 

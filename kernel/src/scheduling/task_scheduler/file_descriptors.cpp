@@ -36,6 +36,21 @@ void fd_table_t::close(){
     }
 }
 
+fd_table_t *fd_table_t::clone(){
+    fd_table_t *new_table = new fd_table_t();
+    new_table->open();
+
+    for (int i = 0; i < MAX_FDS; i++){
+        if (this->entries[i] != nullptr){
+            file_t *file = this->entries[i];
+            new_table->open_file(file->dentry, file->node, file->flags, i);
+            new_table->entries[i]->offset = file->offset;
+        }
+    }
+
+    return new_table;
+}
+
 int fd_table_t::allocate_fd(file_t *file){
     uint64_t rflags = spin_lock(&this->lock);
 

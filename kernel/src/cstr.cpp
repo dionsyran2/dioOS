@@ -547,7 +547,7 @@ int ffsl(long int value){
     long int temp = value;
     for (int i = 0; i < (sizeof(long int) * 8); i++){
         if (temp & 1) return i + 1;
-        temp >= 1;
+        temp >>= 1;
     }
 
     return 0;
