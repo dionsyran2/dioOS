@@ -47,7 +47,7 @@ void setup_io_apic(madt_io_apic_entry* entry){
     uint64_t physical_address = entry->APICAddress;
     uint64_t virtual_address = physical_to_virtual(physical_address); // It always resides in physical memory.
 
-    globalPTM.MapMemory((void*)virtual_address, (void*)physical_address);
+    globalPTM.MapMemory((void*)virtual_address, (void*)physical_address, (1UL << Write));
     
     io_apic_t* io_apic = new io_apic_t;
     io_apic->id = io_apic_count;

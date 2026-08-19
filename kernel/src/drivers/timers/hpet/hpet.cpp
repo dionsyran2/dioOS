@@ -85,7 +85,7 @@ namespace HPET{
         
         // Map the address
         hpet_address = physical_to_virtual(hpet->address.Address);
-        globalPTM.MapMemory((void*)hpet_address, (void*)hpet->address.Address);
+        globalPTM.MapMemory((void*)hpet_address, (void*)hpet->address.Address, (1UL << Write));
         globalPTM.SetFlag((void*)hpet_address, PT_Flag::CacheDisable, true);
 
         // Reset the HPET

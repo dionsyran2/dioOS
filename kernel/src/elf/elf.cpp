@@ -1,5 +1,4 @@
 #include <elf/elf.h>
-#include <elf/headers.h>
 #include <filepath.h>
 #include <kerrno.h>
 #include <elf/hwcap.h>
@@ -101,13 +100,13 @@ void load_pheader(task_t *task, vnode_t *node, program_header64 *pheader, uint64
 
     uint64_t load_addr = base + pheader->p_vaddr;
     
-    // 1. Calculate the exact page boundaries to prevent under-allocation
+    // Calculate the exact page boundaries to prevent under-allocation
     uint64_t start_page = ALIGN_DOWN(load_addr, PAGE_SIZE);
     uint64_t end_page = ALIGN(load_addr + pheader->p_memsz, PAGE_SIZE);
     uint64_t total_alloc_size = end_page - start_page;
 
     int errno;
-    task->vmm->mmap(start_page, total_alloc_size, flags, nullptr, 0, errno);
+    task->vmm->mmap(start_page, total_alloc_size, VM_FIXED | VM_ANON | VM_WRITE, nullptr, 0, errno);
 
     // Stream the data from the file to userspace in 4KB chunks
     char *buffer = new char[4096];
@@ -138,10 +137,9 @@ void load_pheader(task_t *task, vnode_t *node, program_header64 *pheader, uint64
         }
     }
 
-    // Fix the C++ array deletion bug
+    task->vmm->mprotect(start_page, total_alloc_size, flags);
     delete[] buffer;
 
-    // Ensure the heap starts on a fresh page boundary
     uint64_t final_address = base + pheader->p_vaddr + pheader->p_memsz;
     uint64_t aligned_brk = ALIGN(final_address, PAGE_SIZE);
     
@@ -150,36 +148,16 @@ void load_pheader(task_t *task, vnode_t *node, program_header64 *pheader, uint64
     } 
 }
 
-int load_elf(task_t *task, vnode_t *node, int argc, char *argv[], const char *exec_path){
-    // Allocate the header
-    elf64_ehdr* header = new elf64_ehdr;
-
-    // Load the header
-    node->read(header, sizeof(elf64_ehdr), 0);
-
-    // Verify the header
-    if (!verify_header(header)) {
-        delete header;
-        return -ENOEXEC;
-    }
-
-    // Not hacky at all wym
+int load_elf(task_t *task, vnode_t *node, elf64_ehdr *header, int argc, char *argv[], const char* envp[], const char *exec_path){
     char parent_path[512];
     split_path(exec_path, parent_path, task->name);
 
-    uint64_t exec_base = 0;
-    if (header->e_type == 3 /* ET_DYN */) {
-        // It's a PIE binary.
-        exec_base = 0x400000; 
-    }
+    uint64_t exec_base = (header->e_type == 3 /* ET_DYN */) ? 0x400000 : 0;
 
-    // Allocate the program headers
+    // Load Program Headers
     program_header64 *phdrs = new program_header64[header->e_phnum];
-
-    // Read the pheaders
     node->read(phdrs, sizeof(program_header64) * header->e_phnum, header->e_phoff);
 
-    // Load the headers
     bool interpreter_found = false;
     char interp_path[256];
 
@@ -189,63 +167,50 @@ int load_elf(task_t *task, vnode_t *node, int argc, char *argv[], const char *ex
         } else if (phdrs[i].p_type == PT_INTERP) {
             interpreter_found = true;
             node->read(interp_path, phdrs[i].p_filesz, phdrs[i].p_offset);
+            interp_path[phdrs[i].p_filesz] = '\0'; // Ensure null-termination!
         }
     }
-
-    delete phdrs;
+    delete[] phdrs;
 
     uint64_t entry_point = exec_base + header->e_entry;
 
-    // Load the interpreter
+    // Handle Interpreter (ld-linux.so)
     if (interpreter_found){
         vnode_t *interpreter = vfs::resolve_path(interp_path);
+        if (!interpreter) return -ENOENT;
 
-        if (!interpreter) {
-            delete header;
-            return -ENOENT;
-        }
+        elf64_ehdr iheader;
+        interpreter->read(&iheader, sizeof(elf64_ehdr), 0);
 
-        elf64_ehdr* iheader = new elf64_ehdr;
-
-        // Load the header
-        interpreter->read(iheader, sizeof(elf64_ehdr), 0);
-
-        // Verify the header
-        if (!verify_header(iheader)) {
-            delete header;
-            delete iheader;
+        if (!verify_header(&iheader)) {
+            interpreter->close();
             return -ENOEXEC;
         }
 
         uint64_t base = 0x100000000000;
-        entry_point = base + iheader->e_entry;
+        entry_point = base + iheader.e_entry;
 
-        /* Load its pheaders... pretty much exactly what we did above */
-        // Allocate the program headers
-        program_header64 *iphdrs = new program_header64[iheader->e_phnum];
+        program_header64 *iphdrs = new program_header64[iheader.e_phnum];
+        interpreter->read(iphdrs, sizeof(program_header64) * iheader.e_phnum, iheader.e_phoff);
 
-        // Read the pheaders
-        interpreter->read(iphdrs, sizeof(program_header64) * iheader->e_phnum, iheader->e_phoff);
-
-        // Load the headers
-        for (int i = 0; i < iheader->e_phnum; i++) {
+        for (int i = 0; i < iheader.e_phnum; i++) {
             if (iphdrs[i].p_type == PT_LOAD) {
                 load_pheader(task, interpreter, &iphdrs[i], base);
             }
         }
-
-        delete iphdrs;
+        delete[] iphdrs;
         interpreter->close();
     }
 
+    // --- Build Userspace Context ---
     uint64_t phdr_vaddr = exec_base + header->e_phoff;
-    uint8_t random_bytes[16] = { 0 };
-
-    for (int i = 0; i < 16; i++){
-        random_bytes[i] = random(UINT8_MAX);
-    }
+    
+    // AT_RANDOM bytes
+    uint8_t random_bytes[16];
+    for (int i = 0; i < 16; i++) random_bytes[i] = random(UINT8_MAX);
 
     task->registers.rsp = task->userspace_stack;
+    
     task->registers.rsp -= 16;
     task->write_to_userspace((void*)task->registers.rsp, random_bytes, 16);
     uint64_t at_random_ptr = task->registers.rsp;
@@ -261,7 +226,7 @@ int load_elf(task_t *task, vnode_t *node, int argc, char *argv[], const char *ex
         {AT_PHDR, phdr_vaddr},
         {AT_PHENT, header->e_phentsize},
         {AT_PHNUM, header->e_phnum},
-        {AT_BASE, 0x100000000000},
+        {AT_BASE, interpreter_found ? 0x100000000000 : 0}, // POSIX compliance
         {AT_FLAGS, 0},
         {AT_ENTRY, exec_base + header->e_entry},
         {AT_UID, (uint64_t)task->ruid},
@@ -273,10 +238,62 @@ int load_elf(task_t *task, vnode_t *node, int argc, char *argv[], const char *ex
         {AT_EXECFN, at_execfn_ptr},
         {AT_NULL, 0}
     };
-
-    const char* envp[] = { "USER=root", nullptr };  
+    
+    // Assuming setup_stack handles the 16-byte alignment before pushing argc/argv/envp!
     setup_stack(task, argc, argv, (char**)envp, auxv_entries);
 
     task->registers.rip = entry_point;
     return 0;
+}
+
+namespace task_scheduler {
+    extern void __run_task(task_t *task);
+}
+
+#include <kstdio.h>
+int kexecve(const char* pathname, int argc, char* argv[], const char* envp[]){
+    asm ("cli");
+
+    int errno = 0;
+    vnode_t *file = vfs::resolve_path(pathname, MAY_EXEC, errno);
+    if (errno < 0) return errno;
+
+    // 1. Read and Validate Header BEFORE destroying the process space
+    elf64_ehdr header;
+    if (file->read(&header, sizeof(elf64_ehdr), 0) < sizeof(elf64_ehdr) || !verify_header(&header)) {
+        file->close();
+        return -ENOEXEC;
+    }
+
+    task_t *self = task_scheduler::get_current_task();
+
+    self->vmm->close();
+    self->vmm = new mm_struct_t();
+    
+    // Map the new stack
+    self->userspace_stack = (uint64_t)self->vmm->mmap(
+        0x7FFFFFFF000 - DEFAULT_STACK_SIZE, 
+        DEFAULT_STACK_SIZE, 
+        VM_WRITE,
+        nullptr, 0, errno
+    ) + DEFAULT_STACK_SIZE;
+
+    fd_table_t *newtb = self->fd_table->clone(true);
+    self->fd_table->close();
+    self->fd_table = newtb;
+
+    memset(self->signal_actions, 0, sizeof(self->signal_actions));
+    self->pending_signals = 0; 
+    self->fs_pointer = 0;
+
+    memset(&self->registers, 0, sizeof(self->registers));
+
+    load_elf(self, file, &header, argc, argv, envp, pathname);
+
+    file->close();
+
+    self->current_state = NOT_STARTED;
+    // Boot the new program
+    task_scheduler::__run_task(self);
+    __builtin_unreachable();
 }

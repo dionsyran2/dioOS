@@ -32,22 +32,31 @@ void fd_table_t::close(){
         for (int i = 0; i < MAX_FDS; i++) {
             this->close_file(i);
         }
+
+        if (this->cwd)  this->cwd->unref();
         delete this;
     }
 }
 
-fd_table_t *fd_table_t::clone(){
+fd_table_t *fd_table_t::clone(bool cloexec){
     fd_table_t *new_table = new fd_table_t();
     new_table->open();
 
     for (int i = 0; i < MAX_FDS; i++){
         if (this->entries[i] != nullptr){
             file_t *file = this->entries[i];
+
+            if (cloexec && file->flags & O_CLOEXEC) continue; // Skip if cloexec
+
             new_table->open_file(file->dentry, file->node, file->flags, i);
             new_table->entries[i]->offset = file->offset;
         }
     }
-
+    
+    if (this->cwd) {
+        this->cwd->ref();
+        new_table->cwd = this->cwd;
+    }
     return new_table;
 }
 
@@ -196,6 +205,23 @@ int fd_table_t::open_file(dentry_t *dentry, vnode_t *node, uint16_t flags, int f
         file->close();
     }
     
+    return allocated_fd;
+}
+
+int fd_table_t::dup(file_t *file, int fd) {
+    if (fd != -1){
+        this->close_file(fd);
+        
+        uint64_t rflags = spin_lock(&this->lock);
+        
+        file->open();
+        this->entries[fd] = file;
+        
+        spin_unlock(&this->lock, rflags);
+        return fd;
+    }
+
+    int allocated_fd = this->allocate_fd(file);
     return allocated_fd;
 }
 

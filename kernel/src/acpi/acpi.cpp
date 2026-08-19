@@ -15,7 +15,7 @@ namespace ACPI{
             uint64_t entryAddress = *(uint64_t*)((uint64_t)sdtHeader + sizeof(SDTHeader) + (t * sizeof(uint64_t)));
             void* vaddr = (void*)physical_to_virtual(entryAddress);
             void* physical = (void*)entryAddress;
-            globalPTM.MapMemory(vaddr, physical);
+            globalPTM.MapMemory(vaddr, physical, (1UL << Write));
             
             ACPI::SDTHeader* newSDTHeader = (ACPI::SDTHeader*)vaddr;
             for (int i=0;i<4;i++){

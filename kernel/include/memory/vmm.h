@@ -55,6 +55,8 @@ class mm_struct_t{
     // Shared vm state
     void open();
     void close();
+    PageTableManager *_page_table_manager;
+
 
     private:
     void _insert_segment(uint64_t start, uint64_t size, uint64_t flags, vnode_t *file, uint64_t file_offset);
@@ -64,9 +66,9 @@ class mm_struct_t{
     void _merge_vmas();
     void _split_vma(__m_area_t* vma, uint64_t split_address);
 
+
     private:
     __m_area_t *_m_area_list = nullptr;
-    PageTableManager *_page_table_manager;
 
     uint64_t _mmap_hint_address = 0;
 

@@ -51,7 +51,7 @@ void *AcpiOsMapMemory(ACPI_PHYSICAL_ADDRESS PhysicalAddress, ACPI_SIZE Length){
     UINT64 virt = physical_to_virtual(phys);
 
     for (ACPI_SIZE i = 0; i < len; i += 0x1000){
-        globalPTM.MapMemory((void*)(virt + i), (void*)(phys + i));
+        globalPTM.MapMemory((void*)(virt + i), (void*)(phys + i), (1UL << Write));
     }
 
     //kprintf("MAPPED %p to %p (%x)\n", phys, virt, len);

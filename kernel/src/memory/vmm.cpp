@@ -450,25 +450,34 @@ void mm_struct_t::close(){
     }
 }
 
+#include <kstdio.h>
+
 bool mm_struct_t::handle_page_fault(uint64_t address, uint64_t error_code, bool kernel_override){
     task_t *self = task_scheduler::get_current_task();
     if (self->saved_fpu_state) save_fpu_state(self->saved_fpu_state);
 
     address &= ~0xFFFUL;
+
     __m_area_t *vma = this->find_vma(address);
 
-    if (vma == nullptr) return false;
+    // Helper macro/lambda or just explicitly restore before returning false
+    if (vma == nullptr) {
+        if (self->saved_fpu_state) restore_fpu_state(self->saved_fpu_state);
+        return false;
+    }
 
     bool is_write_fault = error_code & 0x2;
     bool is_exec_fault  = error_code & 0x10;
 
     // Reject writes to logically read-only memory
-    if (is_write_fault && !(vma->flags & VM_WRITE) && !kernel_override) {
+    if (is_write_fault && !(vma->flags & VM_WRITE)) {
+        if (self->saved_fpu_state) restore_fpu_state(self->saved_fpu_state);
         return false;
     }
 
     // Reject execution in non-executable memory
     if (is_exec_fault && !(vma->flags & VM_EXEC)) {
+        if (self->saved_fpu_state) restore_fpu_state(self->saved_fpu_state);
         return false; 
     }
 
@@ -480,35 +489,23 @@ bool mm_struct_t::handle_page_fault(uint64_t address, uint64_t error_code, bool 
     uint64_t existing_phys = this->_page_table_manager->getPhysicalAddress((void*)address);
     
     if (existing_phys != 0) {
-        // Copy on write resolution
-        
-        // If it's a write fault, but the VMA says we are allowed to write, 
-        // it means the hardware write-bit was stripped during fork()!
         if (is_write_fault && (vma->flags & VM_WRITE)) {
-            // Allocate a new private page
             void* new_page = GlobalAllocator.RequestPage();
-            
-            // Copy the data from the old shared page to the new private page
-            memcpy(new_page, (void*)address, PAGE_SIZE); 
-            
-            // Drop our reference to the shared page
+
+            memcpy(new_page, (void*)physical_to_virtual(existing_phys), PAGE_SIZE); 
             GlobalAllocator.DecreaseReferenceCount((void*)existing_phys);
             
-            // Update our local variable to point to the new private physical frame
-            existing_phys = virtual_to_physical((uint64_t)new_page);
-        }
+            this->_page_table_manager->MapMemory((void*)address, (void*)virtual_to_physical((uint64_t)new_page), pt_flags);
 
-        // If it was a CoW fault, pt_flags now correctly includes PT_Flag::Write, 
-        // unlocking the page for future writes!
-        this->_page_table_manager->MapMemory((void*)address, (void*)existing_phys, pt_flags);
+            if (self->saved_fpu_state) restore_fpu_state(self->saved_fpu_state);
+            return true;
+        }
         
         if (self->saved_fpu_state) restore_fpu_state(self->saved_fpu_state);
-        return true;
+        return false;
     }
 
     // --- DEMAND PAGING (Unloaded Files / Anonymous Memory) ---
-    // If the page wasn't mapped during fork, we end up here.
-    
     void* page = GlobalAllocator.RequestPage();
     memset(page, 0, PAGE_SIZE);
 

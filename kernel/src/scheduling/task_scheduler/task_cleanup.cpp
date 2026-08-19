@@ -2,6 +2,8 @@
 #include <paging/PageFrameAllocator.h>
 #include <bits/signals.h>
 #include <kstdio.h>
+
+#include <drivers/timers/common.h>
 namespace task_scheduler {
     extern kstd::linked_list_t<task_t *> pending_cleanup;
     extern kstd::avl_tree_t<task_t *> task_search_tree;
@@ -17,7 +19,9 @@ namespace task_scheduler {
     void task_cleaner() {
         task_t *self = task_scheduler::get_current_task();
         while (1) {
-            if (pending_cleanup.size() == 0) self->block();
+            if (pending_cleanup.size() == 0) {
+                self->block();
+            }
 
             pending_cleanup.lock();
             while (pending_cleanup.size()){
@@ -26,7 +30,7 @@ namespace task_scheduler {
                 
                 uint64_t rflags = spin_lock(&victim->cleanup_lock);
 
-                //if (victim->vmm) victim->vmm->close();
+                if (victim->vmm) victim->vmm->close();
                 if (victim->fd_table) victim->fd_table->close();
 
                 uint64_t required_pages = DIV_ROUND_UP(g_fpu_storage_size, PAGE_SIZE);
@@ -36,8 +40,7 @@ namespace task_scheduler {
                 if (victim->ppid){
                     task_t *parent = task_search_tree.search(victim->ppid);
                     if (parent) {
-                        kprintf("PPID: %p\n", victim->ppid);
-                        parent->signal(SIGCHLD);
+                        parent->signal(SIGCHLD, victim->pid);
                     }
                 }
 

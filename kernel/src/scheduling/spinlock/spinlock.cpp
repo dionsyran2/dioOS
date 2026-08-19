@@ -23,15 +23,19 @@ uint64_t spin_lock(spinlock_t* lock) {
     return flags;
 }
 
-#include <kstdio.h>
-
 void spin_unlock(spinlock_t *lock, uint64_t flags) {
     // Release the lock
     __atomic_store_n(lock, 0, __ATOMIC_RELEASE);
     
     // Restore cpu flags
-    if (flags & (1 << 8)){
-        serialf("flags: 0x%x\n", flags);
-    }
     set_cpu_flags(flags);
+}
+
+
+void spinlock2_t::lock(){
+    this->rflags = spin_lock(&this->slock);
+}
+
+void spinlock2_t::unlock(){
+    spin_unlock(&this->slock, this->rflags);
 }

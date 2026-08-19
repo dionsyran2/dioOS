@@ -77,9 +77,11 @@ struct task_t {
 
     pid_t pid; // Process id
     tid_t tgid; // Thread group id
+    pid_t pgid; // Process group id
+
 
     pid_t ppid; // Parent Process Id
-
+    
     sid_t sid = 0; // Session ID
 
     gid_t rgid = 0; // Real Group ID (The user group)
@@ -124,6 +126,7 @@ struct task_t {
     /* Signals */
     uint64_t pending_signals = 0;
     uint64_t blocked_signals = 0;
+    pid_t signal_source[NSIG];
     sigaction signal_actions[NSIG];
     
     /* Syscall Execution Stuff */
@@ -137,6 +140,8 @@ struct task_t {
     kstd::avl_tree_t<task_t *> *block_list; // Useful if time-blocked, so the scheduler can remove it from the list and prevent double-wakeups
     uint64_t block_deadline; // If time-blocked, for how much time?
     int block_status; // 0 on success, -ETIMEDOUT on timeout. (Reset to 0 on every block)
+    int block_intr_info;
+    spinlock2_t blocking_lock;
     uint64_t counter;
     uint64_t quantum_start;
     __task_state current_state;
@@ -163,6 +168,7 @@ struct task_t {
     void deliver_signal(int signum);
     void restore_signal();
     void signal(int signum);
+    void signal(int signum, pid_t source);
 };
 
 namespace task_scheduler {

@@ -7,6 +7,8 @@
 #include <structures/lists/linked_list.h>
 #include <math.h>
 
+
+#define AVL_REC_CONT -100
 namespace kstd {
     template <typename T>
     class avl_node_t {
@@ -246,6 +248,23 @@ namespace kstd {
             }
         }
 
+        int _inorder_recursive(avl_node_t<T> *node, int (*cb)(T, void *), void *ctx){
+            if (node->get_left_child()){
+                int ret = _inorder_recursive(node->get_left_child(), cb, ctx);
+                if (ret != AVL_REC_CONT) return ret;
+            }
+
+            int r = cb(node->data, ctx);
+            if (r != AVL_REC_CONT) return r;
+
+            if (node->get_right_child()){
+                int ret = _inorder_recursive(node->get_right_child(), cb, ctx);
+                if (ret != AVL_REC_CONT) return ret;
+            }
+
+            return AVL_REC_CONT;
+        }
+
         public:
         void insert(uint64_t key, T data){
             if (this->search(key))
@@ -339,6 +358,12 @@ namespace kstd {
 
         void inorder(void (*cb)(T, void *), void *ctx){
             if (this->root) this->_inorder_recursive(this->root, cb, ctx);
+        }
+
+        int inorder(int (*cb)(T, void *), void *ctx){
+            if (this->root) return this->_inorder_recursive(this->root, cb, ctx);
+
+            return -100;
         }
 
 

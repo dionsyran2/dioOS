@@ -29,8 +29,6 @@ extern "C" uint64_t handle_syscall(__registers_t* registers){
         return -ENOSYS;
     }
 
-    serialf("%d | ", registers->rax);
-
     unsigned long ret = entry(registers->rdi, registers->rsi, registers->rdx,
         registers->r10, registers->r8, registers->r9);
 

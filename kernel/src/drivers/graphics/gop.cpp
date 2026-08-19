@@ -5,8 +5,8 @@
 #include <cstr.h>
 #include <math.h>
 #include <kerrno.h>
-
-
+#include <memory/heap.h>
+#include <paging/PageTableManager.h>
 
 namespace drivers{
     GOP::GOP(limine_framebuffer* fb){
@@ -26,10 +26,11 @@ namespace drivers{
         this->framebuffer = (uint32_t*)fb->address;
 
         // Allocate the backbuffer
-        // TODO: Once i write a heap allocator, this should be allocated on the heap!
         size_t total_size = this->pitch * this->height;
 
-        this->backbuffer = (uint32_t*)GlobalAllocator.RequestPages(DIV_ROUND_UP(total_size, 0x1000));
+        globalPTM.MapMemory(this->framebuffer, (void*)virtual_to_physical((uint64_t)this->framebuffer), (1UL << Write) | (1UL << WriteThrough));
+
+        this->backbuffer = (uint32_t*)malloc(total_size);
         memset(this->backbuffer, 0, total_size);
         memset(this->framebuffer, 0, total_size);
 

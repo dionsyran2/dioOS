@@ -24,7 +24,7 @@ void copy_trampoline(){
 
     // Identity map it
     for (size_t i = 0; i < blob_size; i += 0x1000){
-        globalPTM.MapMemory((void*)(ap_trampoline_base + i), (void*)(ap_trampoline_base + i));
+        globalPTM.MapMemory((void*)(ap_trampoline_base + i), (void*)(ap_trampoline_base + i), (1UL << Write));
         globalPTM.SetFlag((void*)(ap_trampoline_base + i), PT_Flag::CacheDisable, true);
     }
 

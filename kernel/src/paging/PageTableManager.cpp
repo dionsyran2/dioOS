@@ -16,10 +16,13 @@ PageTableManager::PageTableManager(PageTable* PML4){
 void PageTableManager::MapMemory(void* VirtualMemory, void* PhysicalMemory, uint64_t flags){
     this->MapMemory(VirtualMemory, PhysicalMemory);
 
-    for (int i = 1; i < 64; i++){ // Start at 1 so we don't even think of modifying the present bit
-        if ((flags & (1UL << i)) == 0) continue;
+    int bit = __builtin_ffsll(flags) - 1;
 
-        this->SetFlag(VirtualMemory, (PT_Flag)i, true);
+    while (flags != 0) {
+        flags &= ~(1UL << bit);
+
+        this->SetFlag(VirtualMemory, (PT_Flag)bit, true);
+        bit = __builtin_ffsll(flags) - 1;
     }
 }
 
@@ -96,7 +99,6 @@ void PageTableManager::MapMemory(void* VirtualMemory, void* PhysicalMemory){
 
     page->set_address((uint64_t)PhysicalMemory);
     page->set_flag(PT_Flag::Present, true);
-    page->set_flag(PT_Flag::Write, true);
     
     /* Flush the TLB for the single virtual address */
     __native_flush_tlb_single((uint64_t)VirtualMemory);

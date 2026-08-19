@@ -1,86 +1,54 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <sys/syscall.h>
-
-// Standard x86_64 Syscall Numbers
-#define SYS_clone 56
-#define SYS_fork  57
-#define SYS_vfork 58
-#define SYS_exit  60
-#define SYS_wait4 61
-
-// Standard Linux Clone Flags (for the thread test)
-#define SIGCHLD       17
-#define CLONE_VM      0x00000100
-#define CLONE_FS      0x00000200
-#define CLONE_FILES   0x00000400
-#define CLONE_SIGHAND 0x00000800
-
-// Stack for the thread (64KB)
-#define STACK_SIZE 65536
-char clone_stack[STACK_SIZE];
+#include <sys/wait.h>
 
 int main() {
-    printf("========== EXPLICIT SYSCALL CLONING TEST ==========\n\n");
+    printf("========== GLIBC FORK() TEST ==========\n");
+    printf("Parent process starting with PID: %d\n", getpid());
 
-    // ---------------------------------------------------------
-    // 1. FORK TEST (Syscall 57)
-    // ---------------------------------------------------------
-    printf("--- Testing fork() via Syscall 57 ---\n");
-    
-    long p = syscall(SYS_fork);
-    
-    if (p < 0) {
-        perror("fork failed");
-    } else if (p == 0) {
-        printf("[FORK]  Child process running! (PID: %d)\n", getpid());
-        syscall(SYS_exit, 0); 
+    // Call the standard glibc fork wrapper
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        // Error handling if fork fails (e.g., returns -ENOMEM)
+        perror("fork() failed");
+        return 1;
+        
+    } else if (pid == 0) {
+        // ---------------------------------------------------
+        // CHILD PROCESS BLOCK
+        // ---------------------------------------------------
+        printf("[Child]  Hello from the child! My PID is: %d\n", getpid());
+        printf("[Child]  My parent's PID is: %d\n", getppid());
+        printf("[Child]  Exiting with status 42...\n");
+        
+        // Use standard exit() to trigger your SYS_exit syscall
+        exit(42); 
+        
     } else {
-        printf("[FORK]  Parent waiting for child %ld...\n", p);
-        syscall(SYS_wait4, p, NULL, 0, NULL);
-        printf("[FORK]  Child reaped successfully.\n\n");
+        // ---------------------------------------------------
+        // PARENT PROCESS BLOCK
+        // ---------------------------------------------------
+        printf("[Parent] Successfully spawned child with PID: %d\n", pid);
+        printf("[Parent] Waiting for child to finish...\n");
+
+        int status;
+        // Wait for the specific child to exit (triggers your SYS_wait4 syscall)
+        pid_t reaped_pid = waitpid(pid, &status, 0);
+
+        if (reaped_pid == pid) {
+            printf("[Parent] Child %d reaped successfully.\n", reaped_pid);
+            
+            // Extract the exit code using standard POSIX macros
+            if (WIFEXITED(status)) {
+                printf("[Parent] Child exited normally with status: %d\n", WEXITSTATUS(status));
+            }
+        } else {
+            perror("[Parent] waitpid() failed");
+        }
     }
 
-    // ---------------------------------------------------------
-    // 2. VFORK TEST (Syscall 58)
-    // ---------------------------------------------------------
-    printf("--- Testing vfork() via Syscall 58 ---\n");
-    
-    p = syscall(SYS_vfork);
-    
-    if (p < 0) {
-        perror("vfork failed");
-    } else if (p == 0) {
-        printf("[VFORK] Child process running! (PID: %d)\n", getpid());
-        // Must raw exit to avoid closing parent's stdio buffers!
-        syscall(SYS_exit, 0); 
-    } else {
-        printf("[VFORK] Parent unpaused! Child exited successfully.\n\n");
-    }
-
-    // ---------------------------------------------------------
-    // 3. THREAD TEST (Syscall 56)
-    // ---------------------------------------------------------
-    printf("--- Testing thread creation via Syscall 56 ---\n");
-    
-    // Threads still require SYS_clone because we MUST pass a new stack pointer.
-    void *stack_top = (void *)(&clone_stack[STACK_SIZE]);
-    int thread_flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | SIGCHLD;
-    
-    p = syscall(SYS_clone, thread_flags, stack_top, NULL, NULL, 0);
-    
-    if (p < 0) {
-        perror("thread clone failed");
-    } else if (p == 0) {
-        printf("[CLONE] Hello from the clone thread! (PID: %d)\n", getpid());
-        syscall(SYS_exit, 0);
-    } else {
-        printf("[CLONE] Parent waiting for thread %ld...\n", p);
-        syscall(SYS_wait4, p, NULL, 0, NULL);
-        printf("[CLONE] Thread reaped successfully.\n\n");
-    }
-
-    printf("================ ALL TESTS PASSED ================\n");
+    printf("========== TEST COMPLETE ==========\n");
     return 0;
 }

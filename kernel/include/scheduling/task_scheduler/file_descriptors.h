@@ -36,11 +36,12 @@ class fd_table_t {
 
     void open();
     void close();
-    fd_table_t *clone();
+    fd_table_t *clone(bool cloexec = false);
 
     int allocate_fd(file_t *file);
     int open_file(int dirfd, const char *filename, uint16_t flags, int mode, int fd = -1);
     int open_file(dentry_t *dentry, vnode_t *vnode, uint16_t flags, int fd = -1);
+    int dup(file_t *file, int fd = -1);
     int close_file(int fd);
     char *get_file_path(dentry_t *dentry);
 

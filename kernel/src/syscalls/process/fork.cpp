@@ -5,7 +5,6 @@ long sys_fork(){
     task_t* child = task_scheduler::clone(0, 0, self->syscall_registers);
     task_scheduler::mark_as_ready(child);
     
-    self->block();
     return child->pid;
 }
 

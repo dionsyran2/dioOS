@@ -18,6 +18,7 @@ bool mutex_t::lock(uint64_t timeout_ms) {
     // Slow Path: Mutex is held. We must block.
     this->wait_queue.add(self);
 
+    spin_unlock(&this->spinlock, flags);
     
     if (timeout_ms > 0) {
         self->block(timeout_ms, nullptr);

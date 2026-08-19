@@ -72,7 +72,7 @@ namespace pci{
         uint64_t virt = physical_to_virtual(physical);
 
         if (globalPTM.getPhysicalAddress((void*)(virt & (~0xFFF))) == 0){
-            globalPTM.MapMemory((void*)(virt & (~0xFFF)), (void*)(physical & (~0xFFF)));
+            globalPTM.MapMemory((void*)(virt & (~0xFFF)), (void*)(physical & (~0xFFF)), (1UL << Write));
             globalPTM.SetFlag((void*)(virt & (~0xFFF)), PT_Flag::CacheDisable, true);
         }
 
@@ -101,7 +101,7 @@ namespace pci{
         uint64_t virt = physical_to_virtual(physical);
 
         if (globalPTM.getPhysicalAddress((void*)(virt & (~0xFFF))) == 0){
-            globalPTM.MapMemory((void*)(virt & (~0xFFF)), (void*)(physical & (~0xFFF)));
+            globalPTM.MapMemory((void*)(virt & (~0xFFF)), (void*)(physical & (~0xFFF)), (1UL << Write));
             globalPTM.SetFlag((void*)(virt & (~0xFFF)), PT_Flag::CacheDisable, true);
         }
 
@@ -257,7 +257,7 @@ namespace pci{
         uint64_t virtual_address = get_virtual_device_mmio_address(physical_address);
 
         for (uint32_t i = 0; i < bar_size; i += 0x1000){
-            globalPTM.MapMemory((void*)(virtual_address + i), (void*)(physical_address + i));
+            globalPTM.MapMemory((void*)(virtual_address + i), (void*)(physical_address + i), (1UL << Write));
             globalPTM.SetFlag((void*)(virtual_address + i), PT_Flag::CacheDisable, true);
             globalPTM.SetFlag((void*)(virtual_address + i), PT_Flag::WriteThrough, true);
         }

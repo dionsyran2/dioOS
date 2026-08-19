@@ -6,7 +6,7 @@ int kill(int pid, int signum) {
         task_t *victim = task_scheduler::search_by_pid(pid);
         if (!victim) return -ESRCH;
         
-        victim->signal(signum);
+        victim->signal(signum, task_scheduler::get_current_task()->pid);
     }
 
     /*

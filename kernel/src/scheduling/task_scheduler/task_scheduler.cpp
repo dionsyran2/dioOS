@@ -289,13 +289,19 @@ namespace task_scheduler {
         asm ("cli");
 
         cpu_local_data* local = get_cpu_local_data();
-
+        
+        bool should_push = false;
         // Save the current task's state
-        if (local->current_task) __save_task(regs, local->current_task);
+        if (local->current_task) {
+            if (local->current_task->current_state == RUNNING || local->current_task->current_state == INTERRUPTABLE){
+                should_push = true;
+            }
 
-        /* If its state transitioned to PAUSED, it means its not blocked and should be readded to the queue */
-        if (local->current_task && (local->current_task->current_state == PAUSED || local->current_task->current_state == INTERRUPTABLE)){
-            local->scheduler_queue->push(local->current_task);
+            __save_task(regs, local->current_task);
+
+            if (should_push){
+                local->scheduler_queue->push(local->current_task);
+            }
         }
         
         task_t *next = __find_runnable_task();

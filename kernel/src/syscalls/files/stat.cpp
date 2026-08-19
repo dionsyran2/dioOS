@@ -2,7 +2,7 @@
 #include <bits/stat.h>
 
 
-long sys_stat_internal(vnode_t* node, struct stat* statbuf, bool lnk){
+long sys_stat_internal(vnode_t* node, struct stat* statbuf){
     if (node == nullptr) return -ENOENT;
 
     task_t* self = task_scheduler::get_current_task();
@@ -36,39 +36,55 @@ long sys_stat_internal(vnode_t* node, struct stat* statbuf, bool lnk){
     return 0;
 };
 
-long sys_stat(char* fn, struct stat* out){
+long sys_stat(const char* fn, struct stat* out){
     task_t* self = task_scheduler::get_current_task();
 
+    char* kpath = self->read_string((char*)fn);
+    if (!kpath) return -EFAULT;
+
+    int err = 0;
+    vnode_t* node = vfs::resolve_path(kpath, 0, err);
+    free(kpath);
+
+    if (!node) return err;
+
     struct stat statbuf;
+    long ret = sys_stat_internal(node, &statbuf);
 
-    int err;
-    vnode_t* node = vfs::resolve_path(fn, 0, err);
-
-    long ret = sys_stat_internal(node, &statbuf, true);
-
-    self->write_to_userspace(out, &statbuf, sizeof(stat));
+    if (ret == 0) {
+        if (self->write_to_userspace(out, &statbuf, sizeof(stat)) < 0) {
+            ret = -EFAULT;
+        }
+    }
 
     node->close();
-
     return ret;
 }
 
 REGISTER_SYSCALL(SYS_stat, sys_stat);
 
-long sys_lstat(char* fn, struct stat* out){
+long sys_lstat(const char* fn, struct stat* out){
     task_t* self = task_scheduler::get_current_task();
 
+    char* kpath = self->read_string((char*)fn);
+    if (!kpath) return -EFAULT;
+
+    int err = 0;
+    vnode_t* node = vfs::resolve_path(kpath, 0, err, true, false);
+    free(kpath);
+
+    if (!node) return err;
+
     struct stat statbuf;
+    long ret = sys_stat_internal(node, &statbuf);
 
-    int err;
-    vnode_t* node = vfs::resolve_path(fn, 0, err, true, false);
-
-    long ret = sys_stat_internal(node, &statbuf, false);
-
-    self->write_to_userspace(out, &statbuf, sizeof(stat));
+    if (ret == 0) {
+        if (self->write_to_userspace(out, &statbuf, sizeof(stat)) < 0) {
+            ret = -EFAULT;
+        }
+    }
 
     node->close();
-
     return ret;
 }
 
@@ -81,7 +97,7 @@ long sys_fstat(int fd, struct stat* out){
     if (file == nullptr) return -EBADF;
     struct stat statbuf;
 
-    long ret = sys_stat_internal(file->node, &statbuf, true);
+    long ret = sys_stat_internal(file->node, &statbuf);
 
     self->write_to_userspace(out, &statbuf, sizeof(stat));
 
@@ -93,21 +109,49 @@ REGISTER_SYSCALL(SYS_fstat, sys_fstat);
 
 #define AT_SYMLINK_NOFOLLOW 0x100
 
-long sys_newfstatat(int dirfd, const char* fn, stat* out, int flags){
+long sys_newfstatat(int dirfd, const char* fn, struct stat* out, int flags){
     task_t* self = task_scheduler::get_current_task(); 
+    
+    char *kpath = self->read_string((char*)fn);
+    if (!kpath) return -EFAULT;
 
-    int fd = self->fd_table->open_file(dirfd, fn, 0, 0);
+    dentry_t *base_dir = nullptr;
+    if (kpath[0] != '/') {
+        if (dirfd == AT_FDCWD) {
+            base_dir = self->fd_table->cwd;
+        } else {
+            file_t *dir_file = self->fd_table->get_file(dirfd);
+            if (!dir_file || !dir_file->dentry) {
+                free(kpath);
+                return -EBADF;
+            }
+            base_dir = dir_file->dentry;
+        }
+    }
 
-    if (fd < 0) return fd;
-    file_t *file = self->fd_table->get_file(fd);
+    int err = 0;
+    bool follow_trailing = !(flags & AT_SYMLINK_NOFOLLOW);
+    
+    dentry_t *dentry = vfs::resolve_path_dentry_at(base_dir, kpath, 0, err, true, follow_trailing);
+    free(kpath);
+    
+    if (!dentry) return err;
+
+    vnode_t *node = vfs::_get_vnode(dentry);
+    if (!node) {
+        dentry->unref();
+        return -EIO;
+    }
 
     struct stat statbuf;
+    long ret = sys_stat_internal(node, &statbuf);
+    
+    if (ret == 0) {
+        self->write_to_userspace(out, &statbuf, sizeof(stat));
+    }
 
-    long ret = sys_stat_internal(file->node, &statbuf, (flags & AT_SYMLINK_NOFOLLOW) == 0);
-
-    self->write_to_userspace(out, &statbuf, sizeof(stat));
-
-    self->fd_table->close_file(fd);
+    node->close();
+    dentry->unref();
     
     return ret;
 }

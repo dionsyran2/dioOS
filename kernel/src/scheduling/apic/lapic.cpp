@@ -58,7 +58,7 @@ local_apic_t* init_local_apic(){
     /* Hardware enable the Local APIC if it wasn't enabled */
     uint64_t base = cpu_get_apic_base();
     uint64_t virtual_base = physical_to_virtual(base);
-    globalPTM.MapMemory((void*)virtual_base, (void*)base);
+    globalPTM.MapMemory((void*)virtual_base, (void*)base, (1UL << Write) | (1UL << WriteThrough));
     cpu_set_apic_base(base);
 
 

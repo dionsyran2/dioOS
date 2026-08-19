@@ -71,14 +71,13 @@ void initialize_memory(){
         limine_memmap_entry* entry = memmap_request.response->entries[i];
         
         for (uint64_t i = 0; i < entry->length; i += 0x1000){
-            globalPTM.MapMemory((void*)(MEMORY_BASE + i + entry->base), (void*)(i + entry->base));
-            globalPTM.SetFlag((void*)(MEMORY_BASE + i + entry->base), PT_Flag::NX, true);
+            globalPTM.MapMemory((void*)(MEMORY_BASE + i + entry->base), (void*)(i + entry->base), (1UL << NX) | (1UL << Write));
         }
     }
 
     for (uint64_t i = 0; i < kernel_size_in_pages; i++){
         globalPTM.MapMemory((void*)(kernel_address_request.response->virtual_base + (i * 0x1000)),
-                            (void*)(kernel_address_request.response->physical_base + (i * 0x1000)));
+                            (void*)(kernel_address_request.response->physical_base + (i * 0x1000)), (1UL << Write));
     }
 
     asm ("mov %0, %%cr3" :: "r" (global_ptm_cr3));
@@ -239,7 +238,7 @@ void dump_fs(int indent, vnode_t *node){
 }
 
 void start_userspace(){
-    vnode_t *node = vfs::resolve_path("/temp/clone");
+    vnode_t *node = vfs::resolve_path("/bin/sh");
 
     if (!node) return;
 
@@ -260,7 +259,16 @@ void start_userspace(){
         nullptr
     };
 
-    int r = load_elf(init, node, 1, argp, "/bin/sh");
+    const char *envp[] = {
+        "PATH=/bin",
+        nullptr
+    };
+
+    elf64_ehdr header;
+    if (node->read(&header, sizeof(elf64_ehdr), 0) < sizeof(elf64_ehdr)) {
+        panic("Failed to load init!"); 
+    }
+    int r = load_elf(init, node, &header, 1, argp, envp, "/bin/sh");
     task_scheduler::mark_as_ready(init);
 }
 

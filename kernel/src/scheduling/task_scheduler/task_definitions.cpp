@@ -65,6 +65,7 @@ namespace task_scheduler {
 
 // Here we should prepare for exit... and clean up a couple of stuff!
 void task_t::exit(int exit_code){
+    asm ("cli");
     this->current_state = ZOMBIE;
 
     if (this->clear_child_tid != nullptr) {
@@ -78,7 +79,7 @@ void task_t::exit(int exit_code){
 
     this->exit_code = exit_code;
     
-    serialf("%d exit %d\n", this->pid, exit_code);
+    serialf("%d exit %d\n\r", this->pid, exit_code);
 
     task_scheduler::pending_cleanup.lock();
     task_scheduler::pending_cleanup.add(this);
@@ -86,6 +87,7 @@ void task_t::exit(int exit_code){
 
     task_scheduler::cleanup_task->unblock();
     
+    asm ("sti");
     if (task_scheduler::get_current_task() == this){
         task_scheduler::swap_tasks(); // Exit is only called while this is running (by itself)
                                       // But you never know
@@ -94,11 +96,13 @@ void task_t::exit(int exit_code){
 
 void task_t::block(){
     // Set up the variables
+    this->blocking_lock.lock();
     this->current_state = BLOCKED;
     this->block_list = nullptr;
     this->block_deadline = 0;
     this->block_status = 0;
 
+    this->blocking_lock.unlock();
     // If this task is currently executing, swap to avoid returning prematurely
     if (task_scheduler::get_current_task() == this)
         task_scheduler::swap_tasks();
@@ -106,6 +110,7 @@ void task_t::block(){
 
 void task_t::block(uint64_t deadline, kstd::avl_tree_t<task_t*> *block_list){
     // Set up the variables
+    this->blocking_lock.lock();
     this->current_state = BLOCKED;
     this->block_list = block_list;
     this->block_deadline = time_since_boot + deadline;
@@ -115,6 +120,7 @@ void task_t::block(uint64_t deadline, kstd::avl_tree_t<task_t*> *block_list){
     uint64_t rflags = spin_lock(&task_scheduler::timed_block_list_lock);
     task_scheduler::timed_block_list.insert(this->pid, this);
     spin_unlock(&task_scheduler::timed_block_list_lock, rflags);
+    this->blocking_lock.unlock();
 
     // If this task is currently executing, swap to avoid returning prematurely
     if (task_scheduler::get_current_task() == this)
@@ -122,7 +128,14 @@ void task_t::block(uint64_t deadline, kstd::avl_tree_t<task_t*> *block_list){
 }
 
 void task_t::unblock(){
-    if (!this->current_state == BLOCKED && !this->current_state == INTERRUPTABLE) return;
+    // Record if it was actually asleep before we modify the state
+    this->blocking_lock.lock();
+    bool was_blocked = (this->current_state == BLOCKED);
+
+    if (this->current_state != BLOCKED && this->current_state != INTERRUPTABLE) {
+        this->blocking_lock.unlock();
+        return;
+    }
 
     // Remove it from any block list
     if (this->block_deadline){
@@ -136,8 +149,11 @@ void task_t::unblock(){
     // Unblock the task
     this->current_state = PAUSED;
 
-    // Insert it again into the scheduling queue
-    this->cpu_queue->push(this);
+    if (was_blocked) {
+        this->cpu_queue->push(this);
+    }
+
+    this->blocking_lock.unlock();
 }
 
 int task_t::read_from_userspace(void *kbuffer, const void *uaddress, size_t size){
@@ -184,7 +200,6 @@ int task_t::write_to_userspace(void *uaddress, const void *kbuffer, size_t size)
     uint64_t start = (uint64_t)uaddress;
     uint64_t end = start + size;
 
-    // Switch to the target task's page table so we can inspect/map its memory
     uint64_t current_cr3 = 0;
     uint64_t task_cr3 = this->vmm->get_root_page_table();
     asm volatile ("mov %%cr3, %0" : "=r" (current_cr3));
@@ -194,10 +209,20 @@ int task_t::write_to_userspace(void *uaddress, const void *kbuffer, size_t size)
 
     uint64_t curr_page = ALIGN_DOWN(start, PAGE_SIZE);
     while (curr_page < end) {
+        __m_area_t *vma = this->vmm->find_vma(curr_page);
+        if (!vma || !(vma->flags & VM_WRITE)) {
+            if (current_cr3 != task_cr3) asm volatile ("mov %0, %%cr3" :: "r" (current_cr3));
+            return -EFAULT; // Standard POSIX response for a bad/RO pointer
+        }
+
         uint64_t phys = this->vmm->resolve_physical_address(curr_page);
-        
-        if (phys == 0) {
-            bool success = this->vmm->handle_page_fault(curr_page, 0x2, true);
+        bool hw_writable = this->vmm->_page_table_manager->GetFlag((void*)curr_page, PT_Flag::Write);
+
+        // If it's not mapped (Demand Paging) OR mapped but Read-Only (CoW)
+        if (phys == 0 || !hw_writable) {
+            
+            bool success = this->vmm->handle_page_fault(curr_page, 0x2, false); 
+            
             if (!success) {
                 if (current_cr3 != task_cr3) asm volatile ("mov %0, %%cr3" :: "r" (current_cr3));
                 return -EFAULT;
@@ -206,7 +231,7 @@ int task_t::write_to_userspace(void *uaddress, const void *kbuffer, size_t size)
         curr_page += PAGE_SIZE;
     }
 
-    // Now that all pages are guaranteed to be mapped and present, safe to copy!
+    // Now that all pages are guaranteed to be mapped AND writable in hardware, safe to copy!
     memcpy(uaddress, kbuffer, size);
 
     if (current_cr3 != task_cr3){
@@ -366,7 +391,18 @@ void task_t::restore_signal(){
     task_scheduler::__run_task(this);
 }
 
-void task_t::signal(int signum){
+void task_t::signal(int signum) {
     this->pending_signals |= (1UL << signum);
-    if (this->current_state == BLOCKED || this->current_state == INTERRUPTABLE) this->unblock();
+    if (this->current_state == BLOCKED || this->current_state == INTERRUPTABLE) {
+        this->block_status = -EINTR;
+        block_intr_info = signum;
+        this->unblock();
+    }
+}
+
+void task_t::signal(int signum, pid_t source) {
+    if (this->pending_signals & (1UL << signum)) return; // already pending
+
+    this->signal_source[signum] = source;
+    signal(signum);
 }

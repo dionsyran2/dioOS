@@ -99,7 +99,7 @@ void InitializeHeap(uint64_t base_address, size_t size){
         void* page = GlobalAllocator.RequestPage();
         if (page == nullptr) break; 
 
-        globalPTM.MapMemory((void*)LastHeapAddress, (void*)virtual_to_physical((uint64_t)page));
+        globalPTM.MapMemory((void*)LastHeapAddress, (void*)virtual_to_physical((uint64_t)page), (1UL << Write));
 
         // Only increment the addresses here. Don't touch the header size yet.
         LastHeapAddress += 0x1000;
@@ -131,7 +131,7 @@ void ExpandHeap(size_t size){
         memset(page, 0, PAGE_SIZE);
 
         // Map it
-        globalPTM.MapMemory((void*)LastHeapAddress, (void*)virtual_to_physical((uint64_t)page));
+        globalPTM.MapMemory((void*)LastHeapAddress, (void*)virtual_to_physical((uint64_t)page), (1UL << Write));
 
         // Update the segment
         heap_end->size += 0x1000; // Update the segment header

@@ -280,8 +280,6 @@ namespace line_discipline{
             ret |= POLLOUT;
         }
 
-        ctx->wake_poll_list(POLLIN);
-
         return ret;
     }
 
@@ -302,29 +300,29 @@ namespace line_discipline{
         pt->ctx = self;
         pt->events = POLLIN;
         
-        int poll_res = 0;
-
         uint64_t rflags = 0;
 
-        while (poll_res == 0){
-            poll_res = vt_dev_poll(context, POLLIN, pt);
-            self->block();
-
-            if (poll_res){
+        while (true) {
+            self->current_state = INTERRUPTABLE;
+            
+            int poll_res = vt_dev_poll(context, POLLIN, pt);
+            
+            if (poll_res & POLLIN) {
                 rflags = spin_lock(&ctx->lock);
-
-                if (ctx->has_readable_data()){
+                if (ctx->has_readable_data()) {
+                    self->current_state = RUNNING; 
                     break;
                 }
-
                 spin_unlock(&ctx->lock, rflags);
             }
+
+            if (self->current_state == INTERRUPTABLE) self->block();
         }
 
+        // --- Cleanup Poll Table ---
         pt->poll_list.lock();
         kstd::linked_list_t<poll_table_t *> *q = pt->poll_list.get(0);
         q->lock();
-
         for (int i = 0; i < q->size(); i++){
             if (q->get(i) == pt){
                 q->remove(i);
@@ -335,19 +333,17 @@ namespace line_discipline{
         pt->poll_list.unlock();
         delete pt;
 
-
-        // Now we have the lock and data so we can safely read
         bool icannon = ctx->termios_state.c_lflag & ICANON;
         char *dest = (char*)buffer;
-
         size_t bytes_read = 0;
+
         while (ctx->input_tail != ctx->input_head && bytes_read < size){
             char c = ctx->input_buffer[ctx->input_tail];
             ctx->input_tail = (ctx->input_tail + 1) % sizeof(ctx->input_buffer);
 
             dest[bytes_read++] = c;
 
-            if (icannon && (c == '\n' || c == '\r')) {
+            if (icannon && (c == '\n' || c == '\r' || c == ctx->termios_state.c_cc[VEOF])) {
                 ctx->lines_available--;
                 break;
             }
