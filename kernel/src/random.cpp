@@ -31,8 +31,8 @@ void rand_init(uint32_t seed) {
     if (seed == 0) seed = 1;  // seed cannot be zero
     state = seed;
 
-    devfs::mknod("/random", DEVFS_CHR, &random_devfs_ops, nullptr);
-    devfs::mknod("/urandom", DEVFS_CHR, &random_devfs_ops, nullptr);
+    devfs::mknod("/random", S_IFCHR | 0666, &random_devfs_ops, nullptr);
+    devfs::mknod("/urandom", S_IFCHR | 0666, &random_devfs_ops, nullptr);
 }
 
 uint32_t random() {

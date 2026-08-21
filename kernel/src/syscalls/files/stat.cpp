@@ -1,21 +1,19 @@
 #include <syscalls/syscalls.h>
 #include <bits/stat.h>
 
-
 long sys_stat_internal(vnode_t* node, struct stat* statbuf){
     if (node == nullptr) return -ENOENT;
 
     task_t* self = task_scheduler::get_current_task();
 
-    statbuf->st_dev = node->inode;
-    statbuf->st_ino = node->inode;
+    statbuf->st_dev = node->fs_id;
+    statbuf->st_ino = node->inode ? node->inode : 0;
     statbuf->st_mode =  node->attributes.mode;
-    
 
     statbuf->st_nlink = node->nlink;
     statbuf->st_uid = node->attributes.uid;
     statbuf->st_gid = node->attributes.gid;
-    statbuf->st_rdev = 1;
+    statbuf->st_rdev = 0;
     statbuf->st_size = node->size;
 
     // Size and blocks for regular files and block devices

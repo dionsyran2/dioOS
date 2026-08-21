@@ -3,20 +3,25 @@
 #include <cstr.h>
 
 namespace devfs{
-    devfs_entry_t::devfs_entry_t(char *name, __devfs_entry_type_t type, void *context, devfs_ops_t *operations){
+    devfs_entry_t::devfs_entry_t(char *name, uint16_t mode, void *context, devfs_ops_t *operations){
         strncpy(this->name, name, sizeof(this->name) / sizeof(char));
 
-        this->type = type;
         this->operation_context = context;
         this->operations = operations;
 
-        if (type == DEVFS_DIR){
+        // Zero out attributes and store the mode directly!
+        memset(&this->attributes, 0, sizeof(vnode_attributes_t));
+        this->attributes.mode = mode;
+
+        this->children = nullptr;
+        // Use the POSIX macro to check if we need a children list
+        if (S_ISDIR(mode)){
             this->children = new kstd::linked_list_t<devfs_entry_t *>();
         }
     }
 
     devfs_entry_t::~devfs_entry_t(){
-        if (type == DEVFS_DIR){
+        if (S_ISDIR(this->attributes.mode)){
             delete this->children;
         }
     }

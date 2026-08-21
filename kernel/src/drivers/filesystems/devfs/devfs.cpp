@@ -4,7 +4,7 @@
 #include <filepath.h>
 #include <kerrno.h>
 #include <math.h>
-
+#include <drivers/timers/common.h>
 namespace devfs{
     devfs_entry_t *root = nullptr;
     int devfs_id = 0;
@@ -101,6 +101,7 @@ namespace devfs{
             delete dentry;
         }
 
+        entry->children->unlock();
         out = buffer;
         return rem;
     }
@@ -126,11 +127,56 @@ namespace devfs{
         return create_vnode(entry);
     }
 
+    int vfs_set_attributes(vnode_t *node, vnode_attributes_t *attrs){
+        devfs_entry_t *entry = (devfs_entry_t *)node->fs_data;
+
+        // Collect all of the valid attributes in 'attrs' and make a valid block of them
+        vnode_attributes_t new_attrs = node->attributes;
+
+        if (attrs->valid & VNODE_ATTR_MODE){
+            //new_attrs.mode = (new_attrs.mode & S_IFMT) | (attrs->mode & 0777);
+        }
+
+        if (attrs->valid & VNODE_ATTR_UID){
+            new_attrs.uid = attrs->uid;
+        }
+
+        if (attrs->valid & VNODE_ATTR_GID){
+            new_attrs.gid = attrs->gid;
+        }
+
+        if (attrs->valid & VNODE_ATTR_ATIME){
+            new_attrs.atime = attrs->atime;
+        }
+
+        if (attrs->valid & VNODE_ATTR_MTIME){
+            new_attrs.mtime = attrs->mtime;
+        }
+
+        if (attrs->valid & VNODE_ATTR_CTIME){
+            new_attrs.ctime = attrs->ctime;
+        }
+
+        if (attrs->valid & VNODE_ATTR_BTIME){
+            new_attrs.btime = attrs->btime;
+        }
+
+        // Update the attributes
+        entry->attributes = new_attrs;
+
+        // Update the metadata change time
+        entry->attributes.ctime = current_time;
+        node->attributes = new_attrs;
+
+        return 0;
+    }
+
     vnode_file_operations_t vfs_operations = {
         .read = vfs_read,
         .write = vfs_write,
         .ioctl = vfs_ioctl,
         .poll = vfs_poll,
+        .set_attributes = vfs_set_attributes,
         .lookup = vfs_lookup,
         .get_listing = vfs_get_listing,
     };
@@ -142,21 +188,9 @@ namespace devfs{
         ret->nlink = 1;
         ret->fs_id = devfs_id; 
         ret->fs_data = entry;
-        ret->attributes.mode = 0766;
-
-        switch(entry->type){
-            case DEVFS_DIR:
-                ret->attributes.mode |= S_IFDIR;
-                break;
-                
-            case DEVFS_BLK:
-                ret->attributes.mode |= S_IFBLK;
-                break;
-
-            case DEVFS_CHR:
-                ret->attributes.mode |= S_IFCHR;
-                break; 
-        }
+        ret->inode = entry->inode;
+        
+        ret->attributes = entry->attributes; 
 
         return ret;
     }
@@ -169,9 +203,9 @@ namespace devfs{
         return ret;
     }
 
-    devfs_entry_t *__create_devfs_entry(devfs_entry_t *parent, char *name, __devfs_entry_type_t type, devfs_ops_t *operations, void *ctx){
-        devfs_entry_t *entry = new devfs_entry_t(name, type, ctx, operations);
-        entry->inode = __atomic_fetch_add(&devfs_inode, 1, __ATOMIC_SEQ_CST);
+    devfs_entry_t *__create_devfs_entry(devfs_entry_t *parent, char *name, uint16_t mode, devfs_ops_t *operations, void *ctx){
+        devfs_entry_t *entry = new devfs_entry_t(name, mode, ctx, operations);
+        entry->inode = __atomic_add_fetch(&devfs_inode, 1, __ATOMIC_SEQ_CST);
 
         if (parent && parent->children) {
             parent->children->lock();
@@ -199,38 +233,36 @@ namespace devfs{
         }
 
         while (token != nullptr) {
-            if (!current || !current->children) break;
-
-            devfs_entry_t *next = nullptr;
-
-            // loop to find next
-            current->children->lock();
-            for (int i = 0; i < current->children->size(); i++){
-                devfs_entry_t *c = current->children->get(i);
-
-                if (strcmp(c->name, token)) continue;
-                next = c;
+            // FIX: If we can't go deeper, the path is invalid!
+            if (!current || !current->children) {
+                current = nullptr;
                 break;
             }
 
+            devfs_entry_t *next = nullptr;
+            current->children->lock();
+            for (int i = 0; i < current->children->size(); i++){
+                devfs_entry_t *c = current->children->get(i);
+                if (strcmp(c->name, token) == 0) {
+                    next = c;
+                    break;
+                }
+            }
             current->children->unlock();
 
             current = next;
-
             if (!current) break;
 
             token = strtok_r(nullptr, "/", &rest);
         }
 
         delete[] path_clone;
-
-        if (!current) return nullptr;
         return current;
     }
 
-    void create_devfs_entry(devfs_entry_t *parent, char *name, __devfs_entry_type_t type, devfs_ops_t *operations, vnode_t *ctx){
-        devfs_entry_t *entry = new devfs_entry_t(name, type, ctx, operations);
-        entry->inode = __atomic_fetch_add(&devfs_inode, 1, __ATOMIC_SEQ_CST);
+    void create_devfs_entry(devfs_entry_t *parent, char *name, uint16_t mode, devfs_ops_t *operations, vnode_t *ctx){
+        devfs_entry_t *entry = new devfs_entry_t(name, mode, ctx, operations);
+        entry->inode = __atomic_add_fetch(&devfs_inode, 1, __ATOMIC_SEQ_CST);
 
         if (parent && parent->children) {
             parent->children->lock();
@@ -241,7 +273,8 @@ namespace devfs{
 
     void init(){
         devfs_id = vfs::allocate_filesystem_id();
-        root = __create_devfs_entry(nullptr, "/", DEVFS_DIR, nullptr, nullptr);
+        // S_IFDIR plus standard 0755 permissions
+        root = __create_devfs_entry(nullptr, "/", S_IFDIR | 0755, nullptr, nullptr);
     }
 
 
@@ -269,7 +302,7 @@ namespace devfs{
         return r;
     }
 
-    int mknod(const char *path, __devfs_entry_type_t type, devfs_ops_t *operations, void *ctx){
+    int mknod(const char *path, uint16_t mode, devfs_ops_t *operations, void *ctx){
         if (!root) init();
 
         char parent_path[512];
@@ -281,7 +314,8 @@ namespace devfs{
 
         devfs_entry_t *parent_entry = __internal_resolve_path(parent_path);
         if (!parent_entry) return -1; // Parent directory does not exist
-
+        if (!parent_entry->children) return -ENOTDIR;
+        
         parent_entry->children->lock();
         for (int i = 0; i < parent_entry->children->size(); i++){
             devfs_entry_t *entry = parent_entry->children->get(i);
@@ -294,7 +328,7 @@ namespace devfs{
 
         parent_entry->children->unlock();
 
-        __create_devfs_entry(parent_entry, name, type, operations, ctx);
+        __create_devfs_entry(parent_entry, name, mode, operations, ctx);
 
         return 0;
     }

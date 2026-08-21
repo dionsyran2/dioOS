@@ -49,10 +49,12 @@ extern "C" uint64_t handle_syscall(__registers_t* registers){
                 break;
             case 2:{
                 char *string = self->read_string((char*)args[i]);
+                serialf("'%s'", string ? string : "");
 
-                serialf("'%s'", string);
 
-                free(string);
+                if (string) {
+                    free(string);
+                }
                 break;
             }
             case 3:

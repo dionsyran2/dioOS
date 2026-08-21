@@ -6,8 +6,9 @@
 
 namespace devfs{
     struct devfs_entry_t{
-        __devfs_entry_type_t type;
         char name[64];
+
+        vnode_attributes_t attributes;
 
         // DIR ONLY
         kstd::linked_list_t<devfs_entry_t *> *children;
@@ -28,7 +29,7 @@ namespace devfs{
         // @param type The type of the node (DEVFS_DIR, DEVFS_BLK, DEVFS_CHR)
         // @param context Context to be passed to the operations. Only required if type != DEVFS_DIR
         // @param operations The operations pointer structure
-        devfs_entry_t(char *name, __devfs_entry_type_t type, void *context, devfs_ops_t *operations);
+        devfs_entry_t(char *name, uint16_t mode, void *context, devfs_ops_t *operations);
         ~devfs_entry_t();
     };
 }

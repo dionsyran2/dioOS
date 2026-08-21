@@ -53,6 +53,7 @@ struct poll_table_t {
 #define DEFAULT_STACK_SIZE           (1 * 1024 * 1024) // 1 MB
 #define DEFAULT_COUNTER_VALUE        1 // Default task counter (milliseconds in the current setup)
 #define TASK_QUEUE_SIZE              256
+#define NGROUPS_MAX 32
 
 typedef int pid_t;
 typedef int tid_t;
@@ -93,6 +94,9 @@ struct task_t {
     gid_t sgid = 0; // Saved Group ID
     uid_t suid = 0; // Saved User ID
 
+    pid_t supplementary_groups[NGROUPS_MAX];
+    int num_supplementary_groups = 0;
+    
     bool is_userspace; // Whether this task should run on userspace
 
     /* STACKS (NOTE: These point to the top of the stacks!) */
@@ -154,7 +158,7 @@ struct task_t {
     task_t(function entry, pid_t pid, tid_t tgid, bool is_userspace);
     
     void block();
-    void block(uint64_t deadline, kstd::avl_tree_t<task_t*> *block_list);
+    void block(uint64_t deadline, kstd::avl_tree_t<task_t*> *block_list, bool lock_held = false);
     
     int read_from_userspace(void *kbuffer, const void *uaddress, size_t size);
     int write_to_userspace(void *uaddress, const void *kbuffer, size_t size);

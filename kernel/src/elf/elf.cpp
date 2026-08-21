@@ -161,6 +161,8 @@ int load_elf(task_t *task, vnode_t *node, elf64_ehdr *header, int argc, char *ar
     bool interpreter_found = false;
     char interp_path[256];
 
+    uint64_t phdr_vaddr = 0;
+
     for (int i = 0; i < header->e_phnum; i++) {
         if (phdrs[i].p_type == PT_LOAD) {
             load_pheader(task, node, &phdrs[i], exec_base);
@@ -168,6 +170,8 @@ int load_elf(task_t *task, vnode_t *node, elf64_ehdr *header, int argc, char *ar
             interpreter_found = true;
             node->read(interp_path, phdrs[i].p_filesz, phdrs[i].p_offset);
             interp_path[phdrs[i].p_filesz] = '\0'; // Ensure null-termination!
+        } else if (phdrs[i].p_type == PT_PHDR) {
+            phdr_vaddr = exec_base + phdrs[i].p_vaddr;
         }
     }
     delete[] phdrs;
@@ -202,8 +206,6 @@ int load_elf(task_t *task, vnode_t *node, elf64_ehdr *header, int argc, char *ar
         interpreter->close();
     }
 
-    // --- Build Userspace Context ---
-    uint64_t phdr_vaddr = exec_base + header->e_phoff;
     
     // AT_RANDOM bytes
     uint8_t random_bytes[16];
@@ -226,7 +228,7 @@ int load_elf(task_t *task, vnode_t *node, elf64_ehdr *header, int argc, char *ar
         {AT_PHDR, phdr_vaddr},
         {AT_PHENT, header->e_phentsize},
         {AT_PHNUM, header->e_phnum},
-        {AT_BASE, interpreter_found ? 0x100000000000 : 0}, // POSIX compliance
+        {AT_BASE, interpreter_found ? 0x100000000000 : 0},
         {AT_FLAGS, 0},
         {AT_ENTRY, exec_base + header->e_entry},
         {AT_UID, (uint64_t)task->ruid},
@@ -239,7 +241,6 @@ int load_elf(task_t *task, vnode_t *node, elf64_ehdr *header, int argc, char *ar
         {AT_NULL, 0}
     };
     
-    // Assuming setup_stack handles the 16-byte alignment before pushing argc/argv/envp!
     setup_stack(task, argc, argv, (char**)envp, auxv_entries);
 
     task->registers.rip = entry_point;
@@ -250,7 +251,6 @@ namespace task_scheduler {
     extern void __run_task(task_t *task);
 }
 
-#include <kstdio.h>
 int kexecve(const char* pathname, int argc, char* argv[], const char* envp[]){
     asm ("cli");
 
@@ -258,7 +258,6 @@ int kexecve(const char* pathname, int argc, char* argv[], const char* envp[]){
     vnode_t *file = vfs::resolve_path(pathname, MAY_EXEC, errno);
     if (errno < 0) return errno;
 
-    // 1. Read and Validate Header BEFORE destroying the process space
     elf64_ehdr header;
     if (file->read(&header, sizeof(elf64_ehdr), 0) < sizeof(elf64_ehdr) || !verify_header(&header)) {
         file->close();
@@ -267,6 +266,7 @@ int kexecve(const char* pathname, int argc, char* argv[], const char* envp[]){
 
     task_t *self = task_scheduler::get_current_task();
 
+    asm ("mov %0, %%cr3" :: "r" (global_ptm_cr3));
     self->vmm->close();
     self->vmm = new mm_struct_t();
     

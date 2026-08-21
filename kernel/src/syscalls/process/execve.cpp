@@ -8,6 +8,8 @@ long sys_execve(const char *pathname, char *const argv[], char *const envp[]){
     char *kpath = self->read_string(pathname);
     if (!kpath) return -EFAULT;
 
+    serialf("%d | execve('%s', %p, %p)\n\r", self->pid, kpath, argv, envp);
+
     // Count argc
     int argc = 0;
     while(true){

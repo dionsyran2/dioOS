@@ -205,9 +205,11 @@ namespace ramfs {
 
         // Update the attributes
         rnode->attributes = new_attrs;
-        node->attributes = new_attrs;
+        
         // Update the metadata change time
         rnode->attributes.ctime = current_time;
+        node->attributes = new_attrs;
+
         return 0;
     }
 

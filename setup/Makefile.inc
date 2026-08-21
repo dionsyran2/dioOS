@@ -25,7 +25,7 @@ initfs:
 	# Make the /dev and /proc folders
 	-mkdir $(OSDIR)/tmp_initfs/dev
 	-mkdir $(OSDIR)/tmp_initfs/proc
-	
+	-mkdir $(OSDIR)/tmp_initfs/sbin	
 	# Copy the necessary files
 	-mkdir $(OSDIR)/tmp_initfs/fonts
 	cp $(DISKDIR)/fonts/* $(OSDIR)/tmp_initfs/fonts
@@ -43,8 +43,10 @@ initfs:
 	cp $(DISKDIR)/lib/x86_64-dioOS-gnu/ld-linux-x86-64.so.2 $(OSDIR)/tmp_initfs/lib64
 	cp $(DISKDIR)/lib/x86_64-dioOS-gnu/libc* $(OSDIR)/tmp_initfs/lib/x86_64-dioOS-gnu -r
 	cp $(DISKDIR)/lib/x86_64-dioOS-gnu/libm* $(OSDIR)/tmp_initfs/lib/x86_64-dioOS-gnu -r
+	cp $(DISKDIR)/lib/x86_64-dioOS-gnu/libz* $(OSDIR)/tmp_initfs/lib/x86_64-dioOS-gnu -r
 	cp $(DISKDIR)/lib/x86_64-dioOS-gnu/libresolv* $(OSDIR)/tmp_initfs/lib/x86_64-dioOS-gnu -r
 	-cp $(DISKDIR)/etc/* $(OSDIR)/tmp_initfs/etc/
+	-cp $(DISKDIR)/sbin/* $(OSDIR)/tmp_initfs/sbin/
 	cd $(OSDIR)/tmp_initfs && tar --format=ustar -cf $(OSDIR)/initfs.tar *
 	rm -rf $(OSDIR)/tmp_initfs
 

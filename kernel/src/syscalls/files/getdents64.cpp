@@ -53,7 +53,9 @@ long getdents64(unsigned int fd, linux_dirent* dirp, unsigned int count){
 
         memset(&dirent, 0, sizeof(dirent));
 
-        dirent.d_ino = node->inode;
+        dirent.d_ino = (node->inode == 0) ? 1 : node->inode;
+        dirent.d_off = file->offset + 1; 
+
         dirent.d_reclen = sizeof(linux_dirent);
         if (S_ISBLK(node->attributes.mode)){
             dirent.d_type = DT_BLK;

@@ -32,7 +32,7 @@ namespace line_discipline{
         vt->input_handler = input_handler;
         vt->input_handler_evdev = input_handler_evdev;
 
-        devfs::mknod(filename, DEVFS_CHR, &vt_devfs_ops, ctx);
+        devfs::mknod(filename, S_IFCHR | 0666, &vt_devfs_ops, ctx);
     }
 
     void input_handler(char chr, void *context){
@@ -243,6 +243,7 @@ namespace line_discipline{
 
         // Change of plans, add it to the list immidiatelly
         if (pt != nullptr){
+            pt->poll_list.lock();
             ctx->polling_list.lock();
             
             bool found = false;
@@ -257,12 +258,12 @@ namespace line_discipline{
             if (!found){
                 ctx->polling_list.add(pt);
 
-                pt->poll_list.lock();
                 pt->poll_list.add(&ctx->polling_list);
-                pt->poll_list.unlock();
 
-                ctx->polling_list.unlock();
             }
+
+            ctx->polling_list.unlock();
+            pt->poll_list.unlock();
         }
 
         bool in = ctx->has_readable_data(); // Check if there is data to read

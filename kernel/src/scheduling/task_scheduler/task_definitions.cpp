@@ -108,9 +108,9 @@ void task_t::block(){
         task_scheduler::swap_tasks();
 }
 
-void task_t::block(uint64_t deadline, kstd::avl_tree_t<task_t*> *block_list){
+void task_t::block(uint64_t deadline, kstd::avl_tree_t<task_t*> *block_list, bool lock_held){
     // Set up the variables
-    this->blocking_lock.lock();
+    if (!lock_held) this->blocking_lock.lock();
     this->current_state = BLOCKED;
     this->block_list = block_list;
     this->block_deadline = time_since_boot + deadline;

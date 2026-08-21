@@ -142,6 +142,9 @@ namespace task_scheduler {
             child->vmm = parent->vmm->fork();
         }
 
+        memcpy(&child->supplementary_groups, parent->supplementary_groups, sizeof(parent->supplementary_groups));
+        child->num_supplementary_groups = parent->num_supplementary_groups;
+        
         memcpy(&child->registers, registers, sizeof(__registers_t));
         child->registers.rax = 0;
         child->fs_pointer = parent->fs_pointer;

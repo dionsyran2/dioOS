@@ -45,10 +45,10 @@ evdev_t::evdev_t(evdev_hw_callback_t hw_write_cb, void *context){
     this->write_ptr = 0;
     this->lock = 0;
 
-    devfs::mknod("/input", DEVFS_DIR, nullptr, nullptr);
+    devfs::mknod("/input", S_IFCHR | 0666, nullptr, nullptr);
     char buffer[128];
     stringf(buffer, sizeof(buffer), "/input/evdev%d", __atomic_fetch_add(&evdev_instance_count, 1, __ATOMIC_SEQ_CST));
-    devfs::mknod(buffer, DEVFS_CHR, &evdev_ops, this);
+    devfs::mknod(buffer, S_IFCHR | 0666, &evdev_ops, this);
 }
 
 void evdev_t::push_event(input_event *event){

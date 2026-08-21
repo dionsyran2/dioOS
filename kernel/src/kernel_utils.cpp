@@ -19,6 +19,7 @@
 #include <elf/elf.h>
 #include <drivers/filesystems/devfs/devfs.h>
 #include <drivers/ps2/ps2.h>
+#include <nullfs.h>
 
 
 bool no_smp = false; // Do not enable the APs
@@ -193,6 +194,7 @@ void init_kernel(){
     initialize_timers();
 
     rand_init(current_time);
+    init_nullfs();
     if (!no_smp) start_all_aps();
 
     kprintf("\e[0;32m[INFO]\e[0m Total active CPUs: %d\n", local_cpu_cnt);
@@ -238,7 +240,23 @@ void dump_fs(int indent, vnode_t *node){
 }
 
 void start_userspace(){
-    vnode_t *node = vfs::resolve_path("/bin/sh");
+    // Mount /dev
+    dentry_t *dfs = devfs::resolve_path_dentry("/");
+    if (dfs){
+        dentry_t *dev = vfs::resolve_path_dentry("/dev");
+
+        if (dev){
+            vfs::mount(dev, dfs);
+            dev->unref();
+        }
+
+        dfs->unref();
+    }
+
+    vnode_t *d = vfs::resolve_path("/dev");
+    d->close();
+    
+    vnode_t *node = vfs::resolve_path("/sbin/init");
 
     if (!node) return;
 
@@ -255,7 +273,7 @@ void start_userspace(){
     vnode->close();
 
     char *argp[] = {
-        "/bin/sh",
+        "/sbin/init",
         nullptr
     };
 
@@ -268,7 +286,7 @@ void start_userspace(){
     if (node->read(&header, sizeof(elf64_ehdr), 0) < sizeof(elf64_ehdr)) {
         panic("Failed to load init!"); 
     }
-    int r = load_elf(init, node, &header, 1, argp, envp, "/bin/sh");
+    int r = load_elf(init, node, &header, 1, argp, envp, "/sbin/init");
     task_scheduler::mark_as_ready(init);
 }
 
