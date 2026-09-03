@@ -16,6 +16,8 @@ struct vnode_file_operations_t {
     // @returns Bytes written
     int (*write)(vnode_t *node, const void *buffer, size_t size, size_t offset);
 
+    int (*truncate)(vnode_t *node, size_t size);
+
     int (*ioctl)(vnode_t *node, int op, char* argp);
 
     /* It will 'poll' and if its not available, it will add poll_table_t to a list.
@@ -60,4 +62,6 @@ struct vnode_file_operations_t {
 
     // @brief Called after the last reference to the vnode is closed, and all links pointing to it have been removed
     void (*evict_inode)(vnode_t *node);
+
+    void (*on_delete)(vnode_t *node);
 };

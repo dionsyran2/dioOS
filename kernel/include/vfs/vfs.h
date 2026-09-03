@@ -12,6 +12,14 @@
 
 #define AT_FDCWD -100
 
+class mount_t {
+    public:
+    int fs_id;
+    dentry_t *mountpoint;
+    dentry_t *root;
+    vnode_t *backing_dev;
+};
+
 namespace vfs{
     void initialize();
     int allocate_filesystem_id();
@@ -29,7 +37,7 @@ namespace vfs{
     vnode_t *_get_vnode(dentry_t *dentry);
     dentry_t *_get_dentry(dentry_t *parent, const char *name);
 
-    void mount(dentry_t *mountpoint, dentry_t *target);
+    int mount(dentry_t *mountpoint, dentry_t *target, vnode_t *backing_device);
     dentry_t *get_root();
     
     int mkdir(const char *path, uint16_t mode);

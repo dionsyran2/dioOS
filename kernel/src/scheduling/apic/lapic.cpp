@@ -94,6 +94,9 @@ void local_apic_t::EOI(){
     write_register(LAPIC_EOI_REG, 0);
 }
 
+int cpu_local_data_list_current_index = 0;
+
+
 void init_core(){
     local_apic_t* lapic = init_local_apic();
 
@@ -108,6 +111,8 @@ void init_core(){
 
     uint64_t rflags = spin_lock(&_cpu_local_data_chain_lock);
 
+    cpu_local_data_list_current_index++;
+    
     if (_last_local_data_entry == nullptr){
         _last_local_data_entry = local_data;
     } else {

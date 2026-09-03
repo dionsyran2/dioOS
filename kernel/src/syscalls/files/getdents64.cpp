@@ -36,18 +36,13 @@ long getdents64(unsigned int fd, linux_dirent* dirp, unsigned int count){
 
     if (cnt <= 0) return cnt;
 
-    if (file->offset >= cnt){
-        file->offset = 0;
-        return 0;
-    }
-
     for (int i = 0; i < cnt; i++){
         if ((offset + sizeof(linux_dirent)) >= count){
             break;
         }
 
         dentry_t *dentry = &entries[i];
-        vnode_t *node = dentry->fetch_vnode();
+        vnode_t *node = vfs::_get_vnode(dentry);
 
         if (!node) continue;
 
@@ -75,7 +70,7 @@ long getdents64(unsigned int fd, linux_dirent* dirp, unsigned int count){
             dirent.d_type = DT_UNKNOWN;
         }
 
-        delete node;
+        node->close();
         
         strcpy(dirent.d_name, dentry->name);
 

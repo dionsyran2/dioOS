@@ -216,8 +216,7 @@ void AcpiOsReleaseLock(ACPI_SPINLOCK Handle, UINT64 Flags){
 
 
 ACPI_STATUS AcpiOsInstallInterruptHandler(UINT32 InterruptLevel, ACPI_OSD_HANDLER Handler, void *Context){
-    UINT8 vector = FreeVector;
-    FreeVector++;
+    UINT8 vector = idt_allocate_vector();
 
 
     add_dynamic_isr(vector, (dynamic_isr_handler_t)Handler, Context);

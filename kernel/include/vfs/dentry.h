@@ -18,6 +18,9 @@ struct dentry_t{
 
     uint32_t ref_count;
 
+    uint32_t kflags;
+
+    
     // fs data
     void *fs_data;
     uint32_t inode;
@@ -37,5 +40,5 @@ struct dentry_t{
     // Fetch the vnode this dentry is pointing to
     vnode_t *fetch_vnode();
 
-    vnode_t *(*__fs_fetch_vnode)(dentry_t *entry);
+    vnode_t *(*__fs_fetch_vnode)(dentry_t *entry) = nullptr;
 };

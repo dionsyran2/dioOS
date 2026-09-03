@@ -158,7 +158,7 @@ namespace task_scheduler {
 
     // Forcibly causes a scheduler tick & swaps task
     void swap_tasks(){
-        asm ("sti; int $0xFD");
+        asm ("sti; int %0" :: "i" (SCHEDULER_SWAP_TASKS_VECTOR));
     }
 
     [[noreturn]] void __run_task(task_t *task){

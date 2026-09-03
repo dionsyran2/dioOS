@@ -45,7 +45,7 @@ SECTIONS
     .deviceless-drivers : ALIGN(8) {
         __start_deviceless_drivers = .;
 
-        KEEP(*(SORT_BY_NAME(.drivers)))
+        KEEP(*(SORT_BY_NAME(.deviceless-drivers)))
 
         __stop_deviceless_drivers = .;
     }

@@ -20,9 +20,9 @@ void add_driver_to_list(base_driver_t* drv){
 void start_drivers(){
     for (base_driver_t* drv = driver_list; drv != nullptr; drv = drv->next){
         if (!drv->start_device()){
-            if (drv->pci_device_hdr){
+            if (drv->device->header){
                 kprintf("\e[0;31m[DRIVERS]\e[0m Failed to start driver for device %.4x:%.4x\n", 
-                    drv->pci_device_hdr->vendor_id, drv->pci_device_hdr->device_id);
+                    drv->device->header->vendor_id, drv->device->header->device_id);
             }
 
             delete drv;
@@ -43,8 +43,8 @@ void start_deviceless_drivers(){
 
 // Drivers
 
-base_driver_t::base_driver_t(pci::pci_device_header* hdr){
-    this->pci_device_hdr = hdr;
+base_driver_t::base_driver_t(pci_device_t* dev){
+    this->device = dev;
     return;
 }
 

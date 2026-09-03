@@ -39,6 +39,40 @@ namespace line_discipline{
         __ld_vt_info *ctx = (__ld_vt_info*)context;
         uint64_t rflags = spin_lock(&ctx->lock);
 
+
+        if (ctx->termios_state.c_lflag & ISIG) {
+            int sig_to_send = 0;
+
+            if (chr == ctx->termios_state.c_cc[VINTR]) {
+                sig_to_send = SIGINT;  // Ctrl+C
+            } else if (chr == ctx->termios_state.c_cc[VQUIT]) {
+                sig_to_send = SIGQUIT; // Ctrl+\ 
+            } else if (chr == ctx->termios_state.c_cc[VSUSP]) {
+                sig_to_send = SIGTSTP; // Ctrl+Z
+            }
+
+            if (sig_to_send != 0) {
+                task_t *fgp = task_scheduler::search_by_pid(ctx->fg_pgid);
+                if (fgp) {
+                    fgp->signal(sig_to_send);
+                }
+
+                // Flush the input buffer so half-typed commands are destroyed
+                ctx->input_head = 0;
+                ctx->input_tail = 0;
+                ctx->lines_available = 0;
+
+                // Visually echo the control character (e.g., '^C')
+                if (ctx->termios_state.c_lflag & ECHO) {
+                    char echo_buf[2] = {'^', (char)(chr + 64)};
+                    ctx->vt->write(echo_buf, 2, true); // true = process ONLCR to newline
+                }
+
+                spin_unlock(&ctx->lock, rflags);
+                return;
+            }
+        }
+        
         if ((chr == ctx->termios_state.c_cc[VERASE] || chr == '\x7F') && 
             (ctx->termios_state.c_lflag & ICANON)) {
             
@@ -318,6 +352,7 @@ namespace line_discipline{
             }
 
             if (self->current_state == INTERRUPTABLE) self->block();
+            if (self->block_status < 0) return self->block_status;
         }
 
         // --- Cleanup Poll Table ---
@@ -426,6 +461,28 @@ namespace line_discipline{
                 } else {
                     memcpy(argp, &ctx->vt->ws, sizeof(struct winsize));
                 }
+                return 0;
+            }
+
+            case TIOCGPGRP: {
+                // Get the foreground process group ID
+                if (self) {
+                    // yeah i dont wanna implement SIGTTIN & SIGTTOU rn so this will do
+                    self->write_to_userspace(argp, &self->pgid, sizeof(int));
+                } else {
+                    memcpy(argp, &ctx->fg_pgid, sizeof(int));
+                }
+                return 0;
+            }
+            case TIOCSPGRP: {
+                int new_pgid = 0;
+                if (self) {
+                    self->read_from_userspace(&new_pgid, argp, sizeof(int));
+                } else {
+                    memcpy(&new_pgid, argp, sizeof(int));
+                }
+                
+                ctx->fg_pgid = new_pgid;
                 return 0;
             }
             default:

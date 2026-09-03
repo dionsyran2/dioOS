@@ -5,6 +5,7 @@
 #include <bits/poll.h>
 #include <vfs/vfs.h>
 #include <cstr.h>
+#include <kstdio.h>
 
 namespace ramfs {
     extern vnode_file_operations_t operation_table;
@@ -95,25 +96,29 @@ namespace ramfs {
         rnode->children.lock();
         int size = rnode->children.size();
         
-        if (size < offset){
+        if (size <= offset){
             rnode->children.unlock();
             return 0;
         }
         
-        dentry_t *array = new dentry_t[min(size - offset, limit)];
-
+        size_t sz = min(size - offset, limit);
+        dentry_t *array = new dentry_t[sz];
+        memset(array, 0, sizeof(dentry_t) * sz);
         int count = 0;
+        
         for (int i = offset; i < size; i++){
             if (count >= limit) break;
 
             rfs_dentry_t *rfs_dentry = rnode->children.get(i);
-            convert_to_vfs_dentry(rfs_dentry, &array[i], fs);
+            
+            convert_to_vfs_dentry(rfs_dentry, &array[count], fs); 
             count++;
         }
 
         rnode->children.unlock();
         out = array;
-        return size;
+        
+        return count; 
     }
 
     int vfs_creat(vnode_t *node, const char *name, uint16_t mode){

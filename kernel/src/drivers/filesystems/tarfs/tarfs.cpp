@@ -16,7 +16,7 @@ static uint64_t parse_octal(const char *str, size_t size) {
 namespace tarfs {
     void init_tarfs(void* file, size_t file_size){
         dentry_t *root = ramfs::create_fs();
-        vfs::mount(vfs::get_root(), root);
+        vfs::mount(vfs::get_root(), root, nullptr);
         
         size_t offset = 0;
 

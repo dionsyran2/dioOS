@@ -6,6 +6,7 @@
 //#define ACPICA_FULL_LOGGING
 //#define EXPOSE_PCI_DEVICES_IN_VFS
 
+//#define NVME_LOGGING
 
 // It will print every device it finds on the pci bus during enumeration
 //#define LOG_PCI_DEVICE_ENUMERATION

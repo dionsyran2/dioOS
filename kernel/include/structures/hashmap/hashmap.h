@@ -199,5 +199,17 @@ namespace kstd {
         size_t size() const {
             return this->active_entries;
         }
+
+        template <typename Func>
+        void for_each(Func callback) {
+            uint64_t flags = spin_lock(&this->lock);
+            for (size_t i = 0; i < this->capacity; i++) {
+                if (this->table[i].state == IN_USE) {
+                    callback(this->table[i].key, this->table[i].value);
+                }
+            }
+            spin_unlock(&this->lock, flags);
+        }
+        
     };
 }

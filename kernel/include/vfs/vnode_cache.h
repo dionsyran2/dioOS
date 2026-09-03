@@ -19,4 +19,6 @@ struct vnode_cache_t{
                                   // Fetch will revert that if its successfully retrieved
 
     void invalidate(vnode_t *node);
+
+    void pnp_disconnect(int fs_id);
 };

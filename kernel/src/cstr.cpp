@@ -12,6 +12,37 @@ static bool is_delim(char c, const char* delim) {
 }
 
 
+int atoi(const char *str) {
+    int i = 0;
+    int sign = 1;
+    int result = 0;
+
+    while (str[i] == ' ' || str[i] == '\t' || str[i] == '\n' || 
+           str[i] == '\r' || str[i] == '\v' || str[i] == '\f') {
+        i++;
+    }
+
+    if (str[i] == '-' || str[i] == '+') {
+        if (str[i] == '-') {
+            sign = -1;
+        }
+        i++;
+    }
+
+    while (str[i] >= '0' && str[i] <= '9') {
+        int digit = str[i] - '0';
+
+        if (result > INT32_MAX / 10 || (result == INT32_MAX / 10 && digit > INT32_MAX % 10)) {
+            return (sign == 1) ? INT32_MAX : INT32_MIN;
+        }
+
+        result = result * 10 + digit;
+        i++;
+    }
+
+    return result * sign;
+}
+
 #define BITOP(a,b,op) \
  ((a)[(size_t)(b)/(8*sizeof *(a))] op (size_t)1<<((size_t)(b)%(8*sizeof *(a))))
 

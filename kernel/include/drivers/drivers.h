@@ -13,26 +13,27 @@
 typedef struct driver_class {
     const char* name;
     int type = 0;
-    bool (*supports_device)(pci::pci_device_header* dev);
-    struct base_driver_t* (*create_instance)(pci::pci_device_header* dev);
+    bool (*supports_device)(pci_device_t* dev);
+    struct base_driver_t* (*create_instance)(pci_device_t* dev);
 } driver_class_t;
 
 class base_driver_t{
     public:
-    base_driver_t(pci::pci_device_header* hdr);
+    base_driver_t(pci_device_t* hdr);
     ~base_driver_t();
     
     virtual bool init_device() = 0;
     virtual bool start_device() = 0;
     virtual bool shutdown_device() = 0;
 
-    pci::pci_device_header* pci_device_hdr;
+   pci_device_t* device;
     base_driver_t* next;
 };
 
 
 extern driver_class_t __start_drivers[];
 extern driver_class_t __stop_drivers[];
+
 
 void add_driver_to_list(base_driver_t* drv);
 

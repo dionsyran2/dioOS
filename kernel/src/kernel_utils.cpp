@@ -20,6 +20,7 @@
 #include <drivers/filesystems/devfs/devfs.h>
 #include <drivers/ps2/ps2.h>
 #include <nullfs.h>
+#include <drivers/filesystems/procfs/procfs.h>
 
 
 bool no_smp = false; // Do not enable the APs
@@ -189,8 +190,7 @@ void init_kernel(){
     init_io_apic(); // Note: All external interrupts go directly to the bsp!!!
     setup_bsp_interrupts();
     asm ("sti");
-    InitSerial();
-    
+        
     initialize_timers();
 
     rand_init(current_time);
@@ -198,6 +198,8 @@ void init_kernel(){
     if (!no_smp) start_all_aps();
 
     kprintf("\e[0;32m[INFO]\e[0m Total active CPUs: %d\n", local_cpu_cnt);
+
+    start_deviceless_drivers();
 
     task_t *task = task_scheduler::create_process("k_init", init_kernel_subsystems, false);
     task_scheduler::mark_as_ready(task);
@@ -246,15 +248,29 @@ void start_userspace(){
         dentry_t *dev = vfs::resolve_path_dentry("/dev");
 
         if (dev){
-            vfs::mount(dev, dfs);
+            vfs::mount(dev, dfs, nullptr);
             dev->unref();
         }
 
         dfs->unref();
     }
 
-    vnode_t *d = vfs::resolve_path("/dev");
-    d->close();
+    /*dentry_t *procfs = vfs::resolve_path_dentry("/proc");
+
+    if (procfs){
+        dentry_t *proot = procfs::get_root();
+        
+        if (proot){
+            proot->ref();
+
+            vfs::mount(procfs, proot);
+
+            proot->unref();
+        }
+
+        procfs->unref();
+    }
+    */
     
     vnode_t *node = vfs::resolve_path("/sbin/init");
 

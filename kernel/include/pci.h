@@ -13,6 +13,13 @@
 #define PCI_CMD_SERR                (1 << 8) // SERR# Enable
 #define PCI_CMD_INTERRUPT_DISABLE   (1 << 10) // Interrupt Disable
 namespace pci{
+    enum interrupt_type_t {
+        INT_NONE = 0,
+        INT_LEGACY,
+        INT_MSI,
+        INT_MSIX
+    };
+    
     struct pci_device_header{
         uint16_t vendor_id;
         uint16_t device_id;
@@ -93,6 +100,37 @@ namespace pci{
         uint16_t bridge_control;
     } __attribute__ ((packed));
 
+    class capability_t {
+        public:
+        uint8_t capability_id;
+        uint8_t next_capability;
+    } __attribute__ ((packed));
+
+    class msi_capability_t : public capability_t {
+        public:
+        uint16_t message_control;
+        uint32_t message_address_low;
+        uint32_t message_address_high;
+        uint16_t message_data;
+        uint16_t rsv;
+        uint32_t mask;
+        uint32_t pending;
+    } __attribute__ ((packed));
+
+    class msix_capability_t : public capability_t {
+        public:
+        uint16_t message_control;    // Table size and Enable bit
+        uint32_t table_offset_bir;   // Which BAR the table is in, and the offset
+        uint32_t pba_offset_bir;     // Pending Bit Array
+    } __attribute__((packed));
+
+    struct msix_table_entry_t {
+        uint32_t msg_address_low;  // Target CPU APIC address
+        uint32_t msg_address_high; // Upper 32 bits (usually 0 for x86 APIC)
+        uint32_t msg_data;         // The IDT Vector
+        uint32_t vector_control;   // Bit 0 is the Mask bit (1 = Masked/Off, 0 = Unmasked/On)
+    } __attribute__((packed));
+
     const char* get_class_name(uint8_t class_id);
     const char* get_device_name(uint16_t vendor, uint16_t device);
     const char* get_vendor_name(uint16_t vendor);
@@ -104,11 +142,27 @@ namespace pci{
 }
 
 
+struct pci_device_capabilities_t {
+    bool msi = false;
+    bool msix = false;
+};
+
 struct pci_device_t{
     pci::pci_device_header* header;
     uint8_t bus;
     uint8_t device;
     uint8_t function;
 
-    pci_device_t* next;
+    pci_device_capabilities_t capabilities;
+
+    bool has_capability(uint8_t capability_id);
+    pci::capability_t *get_capability(uint8_t capability_id);
+    int allocate_interrupts(int requested_count);
+    void register_interrupt_handler(int index, void (*handler)(void*), void* ctx, uint8_t target_cpu = 0);
+
+    private:
+    pci::interrupt_type_t irq_type = pci::INT_NONE;
+    int allocated_irq_count = 0;
+    
+    uint8_t idt_vectors[32]; // The actual CPU IDT vectors allocated
 };

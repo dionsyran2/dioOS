@@ -7,7 +7,11 @@
 #include <scheduling/task_scheduler/task_scheduler.h>
 #include <memory.h>
 
-uint64_t FreeVector = FIRST_FREE_VECTOR;
+uint8_t FreeVector = FIRST_FREE_VECTOR;
+
+uint8_t idt_allocate_vector(){
+    return __atomic_fetch_add(&FreeVector, 1, __ATOMIC_SEQ_CST);
+}
 
 
 __attribute__((interrupt)) void coprocessor_halt_execution(void*){

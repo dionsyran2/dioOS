@@ -9,12 +9,12 @@
 #include <scheduling/apic/ioapic.h>
 #include <acpi.h>
 #include <local.h>
+#include <scheduling/apic/lapic.h>
+
 
 void init_pci_interrupt_routing();
 
 namespace pci{
-    pci_device_t* pci_device_descriptor_list = nullptr;
-
     void print_device_info(pci_device_header* header){
         kprintf("\e[0;35m[PCI]\e[0m %s / %s / %s / %.2X / %.2X\n",
             get_vendor_name(header->vendor_id),
@@ -25,19 +25,22 @@ namespace pci{
         );
     }
 
-    void _find_driver(pci_device_header* device){
+    bool _find_driver(pci_device_t* device){
         for (driver_class_t* driver = __start_drivers; driver < __stop_drivers; driver++){
             if (driver->supports_device(device)){
                 base_driver_t* drv = driver->create_instance(device);
                 if (drv->init_device()){
                     add_driver_to_list(drv);
+                    return true;
                 }else{
                     kprintf("\e[0;31m[DRIVERS]\e[0m driver %s for device %.4x:%.4x failed to initialize!\n",
-                        driver->name, device->vendor_id, device->device_id);
+                        driver->name, device->header->vendor_id, device->header->device_id);
                     delete drv;
                 }
             }
         }
+
+        return false;
     }
 
     uint64_t calculate_address(uint64_t mcfg_base, uint8_t bus, uint8_t device, uint8_t function) {
@@ -48,23 +51,13 @@ namespace pci{
     // Forward declaration
     void enumerate_bus(uint64_t base_address, uint8_t bus);
 
-    void create_device_descriptor(pci_device_header* header, uint8_t bus, uint8_t device, uint8_t function){
+    pci_device_t *create_device_descriptor(pci_device_header* header, uint8_t bus, uint8_t device, uint8_t function){
         pci_device_t* desc = new pci_device_t();
         desc->bus = bus;
         desc->device = device;
         desc->function = function;
         desc->header = header;
-        desc->next = nullptr;
-
-        if (pci_device_descriptor_list == nullptr){
-            pci_device_descriptor_list = desc;
-            return;
-        }
-
-        pci_device_t* c = pci_device_descriptor_list;
-        while(c->next) c = c->next;
-
-        c->next = desc;
+        return desc;
     }
 
     void enumerate_function(uint64_t mcfg_base, uint8_t bus, uint8_t device, uint8_t function) {
@@ -82,17 +75,18 @@ namespace pci{
         #ifdef LOG_PCI_DEVICE_ENUMERATION
         print_device_info(header);
         #endif
-
-        #ifdef EXPOSE_PCI_DEVICES_IN_VFS
-        create_device_descriptor(header, bus, device, function);
-        #endif
         
         if ((header->header_type & PCI_HEADER_TYPE_MASK) == 0x01){ // PCI-PCI bridge
             PCIHeader1* bridge = (PCIHeader1*)header;
             enumerate_bus(mcfg_base, bridge->secondary_bus_number);
         }
 
-        _find_driver(header);
+        pci_device_t *dev = create_device_descriptor(header, bus, device, function);
+        dev->capabilities.msi = dev->has_capability(0x05);
+        dev->capabilities.msix = dev->has_capability(0x11);
+        if (!_find_driver(dev)) {
+            delete dev;
+        }
     }
 
     void enumerate_device(uint64_t mcfg_base, uint8_t bus, uint8_t device) {
@@ -148,54 +142,6 @@ namespace pci{
 
         //create_pci_vfs_entries();
         init_pci_interrupt_routing();
-    }
-
-    void create_pci_vfs_entries(){
-        /*vnode_t* bus = vfs::resolve_path("/proc/bus");
-        if (!bus) return;
-
-        bus->mkdir("pci");
-        bus->close();
-
-        vnode_t* pci = vfs::resolve_path("/proc/bus/pci");
-        
-        if (!pci) return kprintf("[PCI] Could not create '/proc/bus/pci'");
-
-        char name_buffer[64];
-        char path_buffer[128];
-        for (pci_device_t* device = pci_device_descriptor_list; device != nullptr; device = device->next){
-            // calculate the path
-            stringf(path_buffer, sizeof(path_buffer), "/proc/bus/pci/%.2x", device->bus);
-            vnode_t* bus = vfs::resolve_path(path_buffer);
-
-            // If it does not exist, create it
-            if (!bus){
-                stringf(name_buffer, sizeof(name_buffer), "%.2x", device->bus);
-                pci->mkdir(name_buffer);
-
-                bus = vfs::resolve_path(path_buffer);
-            }
-
-            if (!bus) continue;
-
-            // Calculate the device path
-            stringf(path_buffer, sizeof(path_buffer), "/proc/bus/pci/%.2x/%.2x.%.1x", device->bus, device->device, device->function);
-
-            vnode_t* dev = vfs::resolve_path(path_buffer);
-
-            // If it does not exist, create it
-            if (!dev){
-                stringf(name_buffer, sizeof(name_buffer), "%.2x.%.1x", device->device, device->function);
-                bus->creat(name_buffer);
-
-                dev = vfs::resolve_path(path_buffer);
-            }
-
-            if (!dev) continue;
-
-            // Create a copy of the config space (Should be a window but I am too lazy to do that now)
-            dev->write(0, sizeof(pci_device_header), device->header);
-        }*/
     }
 
     uint32_t* _get_bar(pci_device_header* device, uint8_t bar){
@@ -270,7 +216,155 @@ namespace pci{
     }
 }
 
+bool pci_device_t::has_capability(uint8_t capability_id){
+    if ((this->header->status & (1 << 4)) == 0) return false; // No capabilities pointer
+    pci::PCIHeader0 *hdr0 = (pci::PCIHeader0 *)this->header;
+    pci::capability_t *current = (pci::capability_t *)((uint64_t)this->header + hdr0->CapabilitiesPtr);
 
+    while (true) {
+        if (current->capability_id == capability_id) return true;
+        if (current->next_capability == 0) break;
+        current = (pci::capability_t *)((uint64_t)this->header + current->next_capability);
+    }
+
+    return false;
+}
+
+pci::capability_t *pci_device_t::get_capability(uint8_t capability_id){
+    if ((this->header->status & (1 << 4)) == 0) return nullptr; // No capabilities pointer
+    pci::PCIHeader0 *hdr0 = (pci::PCIHeader0 *)this->header;
+    pci::capability_t *current = (pci::capability_t *)((uint64_t)this->header + hdr0->CapabilitiesPtr);
+
+    while (true) {
+        if (current->capability_id == capability_id) return current;
+        if (current->next_capability == 0) break;
+        current = (pci::capability_t *)((uint64_t)this->header + current->next_capability);
+    }
+
+    return nullptr;
+}
+
+int pci_device_t::allocate_interrupts(int requested_count) {
+    if (this->has_capability(0x11)) {
+        // MSI-X
+        this->irq_type = pci::INT_MSIX;
+        
+        // Find the MSI-X MMIO table
+        pci::msix_capability_t *capability = (pci::msix_capability_t *)this->get_capability(0x11);
+        uint64_t msix_table_ptr = pci::get_device_bar(this->header, capability->table_offset_bir & 0b111) + (capability->table_offset_bir & ~0x7);
+
+        // Allocate the vectors and configure the table
+        int count_to_allocate = min(requested_count, 32); 
+        
+        for (int i = 0; i < count_to_allocate; i++) {
+            uint8_t vector = idt_allocate_vector();
+            this->idt_vectors[i] = vector;
+
+            uint8_t target_cpu = i % local_cpu_cnt; 
+
+            // Write to the MSI-X hardware table
+            volatile uint32_t* entry = (volatile uint32_t*)((uint64_t)msix_table_ptr + (i * 16));
+            entry[0] = 0xFEE00000 | (target_cpu << 12); // Address Low
+            entry[1] = 0;                               // Address High
+            entry[2] = vector;                          // Data (The IDT vector)
+            entry[3] = 1;                               // Start with it masked
+        }
+
+        capability->message_control |= (1 << 15);
+
+        this->allocated_irq_count = count_to_allocate;
+        return count_to_allocate;
+    }
+
+    if (this->has_capability(0x05)) {
+        // MSI
+        this->irq_type = pci::INT_MSI;
+        
+        pci::msi_capability_t* msi = (pci::msi_capability_t*)this->get_capability(0x05);
+        
+        uint8_t vector = idt_allocate_vector();
+        this->idt_vectors[0] = vector;
+        uint8_t target_cpu = 0;
+
+        // Write the Target APIC Address
+        msi->message_address_low = 0xFEE00000 | (target_cpu << 12);
+
+        // Safely handle the 32-bit vs 64-bit struct shift
+        // Bit 7 of message_control tells us if the device supports 64-bit addresses
+        bool is_64bit_capable = (msi->message_control & (1 << 7)) != 0;
+
+        if (is_64bit_capable) {
+            msi->message_address_high = 0;
+            msi->message_data = vector;
+        } else {
+            volatile uint16_t* data_ptr = (volatile uint16_t*)&msi->message_address_high;
+            *data_ptr = vector;
+        }
+
+        // Configure the Control bits
+        // Clear bits 4-6 (Multiple Message Enable) because we are only requesting 1 vector
+        msi->message_control &= ~(0b111 << 4);
+
+        // Clear bit 0 (MSI Enable) to ensure it starts MASKED (disabled)
+        msi->message_control &= ~1;
+        
+        this->allocated_irq_count = 1; // Fallback to 1
+        return 1;
+    }
+
+    // LEGACY INTx
+    this->irq_type = pci::INT_LEGACY;
+    this->idt_vectors[0] = PCI_INT_VECTOR;
+    this->allocated_irq_count = 1;
+    return 1;
+}
+
+
+void pci_device_t::register_interrupt_handler(int index, void (*handler)(void*), void* ctx, uint8_t target_cpu) {
+    if (index >= this->allocated_irq_count) return;
+    
+    uint8_t actual_idt_vector = this->idt_vectors[index];
+    add_dynamic_isr(actual_idt_vector, handler, ctx);
+
+    cpu_local_data *local = bsp_local;
+
+    while (local){
+        if (local->cpu_id == target_cpu){
+            target_cpu = local->lapic->lapic_id;
+            break;
+        }
+
+        local = local->next;
+    }
+    
+    if (this->irq_type == pci::INT_MSIX) {
+        
+        pci::msix_capability_t *capability = (pci::msix_capability_t *)this->get_capability(0x11);
+        uint64_t bar_phys = pci::get_device_bar(this->header, capability->table_offset_bir & 0x7);
+        uint64_t offset = capability->table_offset_bir & ~0x7UL; 
+        uint64_t msix_table_ptr = bar_phys + offset;
+
+        volatile uint32_t* entry = (volatile uint32_t*)(msix_table_ptr + (index * 16));
+        
+        entry[0] = 0xFEE00000 | (target_cpu << 12); 
+        
+        entry[1] = 0;
+        entry[2] = actual_idt_vector;
+        entry[3] = 0;
+
+    } else if (this->irq_type == pci::INT_MSI) {
+        
+        pci::msi_capability_t* msi_cap = (pci::msi_capability_t*)this->get_capability(0x05);
+        if (msi_cap) {
+            msi_cap->message_address_low = 0xFEE00000 | (target_cpu << 12);
+            msi_cap->message_data = actual_idt_vector;
+            msi_cap->message_control |= 1;
+        }
+
+    } else if (this->irq_type == pci::INT_LEGACY) {
+        this->header->command &= ~(1 << 10);
+    }
+}
 /* ACPI _PRT */
 
 struct irq_info {

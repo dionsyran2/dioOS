@@ -10,6 +10,7 @@
 namespace vfs{
     dentry_t *root_entry;
     vnode_cache_t *vnode_cache;
+    kstd::linked_list_t<mount_t*> mount_list;
 
     int current_filesystem_id = 0;
 
@@ -30,10 +31,12 @@ namespace vfs{
         vnode_cache->invalidate(node);
     }
 
-    void __invalidate_dentry_cache(const char *path) {
-        // Resolve the target dentry from the path
-        dentry_t *target = resolve_path_dentry(path);
-        if (!target) return;
+    void __invalidate_dentry_cache(dentry_t *target){
+        if (target->children.size()){
+            while (target->children.size()){
+                __invalidate_dentry_cache(target->children.get(0));
+            }
+        }
 
         dentry_t *parent = target->parent;
         if (parent) {
@@ -49,6 +52,14 @@ namespace vfs{
             }
             parent->children.unlock();
         }
+    }
+
+    void __invalidate_dentry_cache(const char *path) {
+        // Resolve the target dentry from the path
+        dentry_t *target = resolve_path_dentry(path);
+        if (!target) return;
+
+        __invalidate_dentry_cache(target);
 
         // Release the reference acquired by resolve_path_dentry
         target->unref();
@@ -58,21 +69,72 @@ namespace vfs{
         return __atomic_fetch_add(&current_filesystem_id, 1, __ATOMIC_SEQ_CST);
     }
 
-    void mount(dentry_t *mountpoint, dentry_t *target){
+    int mount(dentry_t *mountpoint, dentry_t *target, vnode_t *backing_device){
+        if (mountpoint->parent && mountpoint->parent->mounted_root == mountpoint) return -EALREADY;
+
+        mount_t *mount = new mount_t;
+        mount->fs_id = mountpoint->fs_id;
+        mount->mountpoint = mountpoint;
+        mount->root = target;
+        mount->backing_dev = backing_device;
+
+        mount_list.lock();
+        mount_list.add(mount);
+
         mountpoint->mounted_root = target;
         target->parent = mountpoint;
 
+        mount_list.unlock();
+
         mountpoint->ref();
         target->ref();
+        return 0;
     }
 
     int unmount(dentry_t *mountpoint){
         if (!mountpoint || !mountpoint->mounted_root) return -ENOENT;
-        if (mountpoint->mounted_root->ref_count > 1) return -EBUSY;
+        if (mountpoint->mounted_root->ref_count > 2) return -EBUSY;
+        
+        mount_list.lock();
+        for (int i = 0; i < mount_list.size(); i++){
+            mount_t *mount = mount_list.get(i);
+
+            if (mount->mountpoint != mountpoint) continue;
+
+            mount_list.remove(i);
+            delete mount;
+            break;
+        }
+        mount_list.unlock();
         
         mountpoint->mounted_root->unref();
         mountpoint->mounted_root = nullptr;
         mountpoint->unref();
+
+        return 0;
+    }
+
+    int disconnect(vnode_t *backing_device){
+        mount_t *pnp = nullptr;
+
+        mount_list.lock();
+        for (int i = 0; i < mount_list.size(); i++){
+            mount_t *mount = mount_list.get(i);
+
+            if (mount->backing_dev != backing_device) continue;
+
+            mount_list.remove(i);
+
+            pnp = mount;
+            break;
+        }
+        mount_list.unlock();
+
+        if (!pnp) return 0;
+
+        pnp->mountpoint->mounted_root->unref();
+        pnp->mountpoint->mounted_root = nullptr;
+        __invalidate_dentry_cache(pnp->root);
 
         return 0;
     }
@@ -91,7 +153,7 @@ namespace vfs{
             ret = dentry->fetch_vnode();
             if (!ret) return nullptr;
 
-            vnode_cache->add(ret);
+            if ((ret->kflag_bitfield & VNODE_KFLAG_NO_CACHE) == 0) vnode_cache->add(ret);
         }
 
         ret->open();
@@ -112,9 +174,10 @@ namespace vfs{
 
             if (!ret) return nullptr;
 
-            parent->add_child(ret);
-            ret->ref();
+            if ((ret->kflags & VNODE_KFLAG_NO_CACHE) == 0) parent->add_child(ret);
         }
+
+        ret->ref();
 
         return ret;
     }
@@ -248,7 +311,7 @@ namespace vfs{
             if (task != nullptr && task->is_userspace) {
                 vnode_t *dir_vnode = _get_vnode(current);
                 if (dir_vnode) {
-                    int perm = vfs_check_permission(dir_vnode, task, MAY_EXEC) < 0;
+                    int perm = vfs_check_permission(dir_vnode, task, MAY_EXEC);
                     dir_vnode->close();
                     
                     if (perm < 0) {

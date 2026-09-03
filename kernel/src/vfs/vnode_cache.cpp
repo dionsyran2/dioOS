@@ -56,10 +56,6 @@ void vnode_cache_t::release(vnode_t *vnode){
         // Erase map index so future fetches look to the disk driver instead of empty space
         this->hashmap->remove(victim_key);
 
-        // Safely free the memory now that all references to it are wiped out
-        if (victim->fs_data) {
-            free(victim->fs_data);
-        }
         delete victim;
     }
 
@@ -93,6 +89,24 @@ void vnode_cache_t::invalidate(vnode_t *node) {
     node->kflag_bitfield |= VNODE_KFLAG_UNLINKED;
 }
 
+void vnode_cache_t::pnp_disconnect(int fs_id) {
+    kstd::linked_list_t<vnode_t*> dead_nodes;
+
+    this->hashmap->for_each([&](uint64_t key, vnode_t* vnode) {
+        if ((key >> 32) == (uint32_t)fs_id) {
+            dead_nodes.add(vnode);
+        }
+    });
+
+    for (int i = 0; i < dead_nodes.size(); i++) {
+        vnode_t* node = dead_nodes.get(i);
+        
+        node->kflag_bitfield |= VNODE_KFLAG_DEAD; 
+        
+        this->invalidate(node);
+    }
+}
+
 vnode_cache_t::vnode_cache_t(){
     this->lru_list = new kstd::linked_list_t<vnode_t *>();
     this->hashmap = new kstd::hashmap<uint64_t, vnode_t *>(128);
@@ -102,3 +116,4 @@ vnode_cache_t::~vnode_cache_t(){
     delete this->lru_list;
     delete this->hashmap;
 }
+

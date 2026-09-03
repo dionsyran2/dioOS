@@ -9,10 +9,6 @@
 #define IDT_TA_CallGate         0b10001100
 #define IDT_TA_TrapGate         0b10001111
 
-#define SCHEDULER_SWAP_TASKS_VECTOR 0xFD
-#define HALT_EXEC_INTERRUPT_VECTOR  0xFE
-#define SPURIOUS_INTERRUPT_VECTOR   0xFF
-
 #define PIT_INTERRUPT_VECTOR 0x21
 #define HPET_INTERRUPT_VECTOR 0x22
 #define APIC_TIMER_INTERRUPT_VECTOR 0x23
@@ -22,8 +18,14 @@
 #define PCI_INT_VECTOR              0x26
 #define COM_PORT_INT_VECTOR         0x27
 
-#define FIRST_FREE_VECTOR 0x50
-extern uint64_t FreeVector;
+#define SCHEDULER_SWAP_TASKS_VECTOR 0x28
+#define HALT_EXEC_INTERRUPT_VECTOR  0x29
+#define SPURIOUS_INTERRUPT_VECTOR   0x2A
+
+#define FIRST_FREE_VECTOR 0x30
+extern uint8_t FreeVector;
+
+uint8_t idt_allocate_vector();
 
 struct __attribute__((packed)) isr_exception_info_t {
     // General Purpose Registers (Pushed by us)

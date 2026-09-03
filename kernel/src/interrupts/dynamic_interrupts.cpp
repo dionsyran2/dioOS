@@ -82,7 +82,7 @@ int add_dynamic_isr(uint8_t vector, dynamic_isr_handler_t handler, void* context
     add_dynamic_isr_to_list(isr);
 
     // Set the stub as the ISR in the IDT table
-    _set_bsp_interrupt_service_routine(isr_stub_table_ptrs[vector], vector, IDT_TA_InterruptGate, 0x08);
+    _set_interrupt_service_routine_for_all(isr_stub_table_ptrs[vector], vector, IDT_TA_InterruptGate, 0x08);
 
     // Return the identifier (So we can remove the handler if necessary)
     return isr->identifier;

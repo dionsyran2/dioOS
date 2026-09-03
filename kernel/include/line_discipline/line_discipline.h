@@ -43,6 +43,8 @@ namespace line_discipline{
         tty_device_t *vt;
 
         termios termios_state;
+        int fg_pgid = 0;
+        
         char input_buffer[1024];
         int input_head = 0;
         int input_tail = 0;

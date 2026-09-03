@@ -3,7 +3,8 @@
 // kflags
 #define VNODE_KFLAG_CACHE_RELEASED (1 << 0) // Whether its free (released) and can safely be removed from the cache
 #define VNODE_KFLAG_UNLINKED       (1 << 1)
-
+#define VNODE_KFLAG_NO_CACHE       (1 << 2)
+#define VNODE_KFLAG_DEAD           (1 << 3) // For force disconnect of pnp storage devices
 
 // mode flags
 #define S_IFMT  00170000

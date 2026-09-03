@@ -228,11 +228,11 @@ void free(void* memory){
     uint64_t rflags = spin_lock(&heap_lock);
 
     if (segment->free) {
-        int *r = (int*)0xDEADBEEF;
-        *r = 0;
+        int *pf = (int*)0xDEADBEEF;
+        *pf = 0;
+
         serialf("\e[0;31m DOUBLE FREE!\e[0m\n");
         
-        // Optional: Report double free error
         spin_unlock(&heap_lock, rflags);
         return;
     }

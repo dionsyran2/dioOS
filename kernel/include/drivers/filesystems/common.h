@@ -2,14 +2,26 @@
 #include <stdint.h>
 #include <stddef.h>
 
-struct vnode_t; // Forward declaration
+struct vnode_t;
+struct dentry_t;
 
-// A struct that defines a filesystem entry
-struct filesystem_entry_t {
-    const char name[64];
+class filesystem_t {
+    public:
+    virtual dentry_t *mount() = 0; // Loads any filesystem data and returns the root dentry
+    virtual void umount() = 0; // Frees any filesystem data
 
-    vnode_t *(*parse_filesystem)(vnode_t *disk); // This will try to read a filesystem of a disk
-                                                 // If it successfully reads one, it will return a root node
+    virtual ~filesystem_t() = default;
+
+    protected:
+    filesystem_t(vnode_t *disk);
 };
 
-void register_filesystem(filesystem_entry_t *filesystem);
+class filesystem_registration_t {
+    public:
+    bool (*has_valid_fs)(vnode_t *disk);
+    filesystem_t *(*create_fs)(vnode_t *disk);
+};
+
+void register_filesystem(filesystem_registration_t *fs);
+
+filesystem_t *find_filesystem(vnode_t *disk);

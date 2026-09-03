@@ -1,6 +1,6 @@
 #include <vfs/dentry.h>
 #include <string.h>
-
+#include <vfs/vnode_flags.h>
 dentry_t::dentry_t(){
     this->ref_count = 0;
     this->mounted_root = nullptr;
@@ -64,6 +64,7 @@ void dentry_t::add_child(dentry_t* child){
 }
 
 vnode_t *dentry_t::fetch_vnode(){
+    if (this->kflags & VNODE_KFLAG_DEAD) return nullptr;
     if (this->__fs_fetch_vnode == nullptr) return nullptr;
 
 

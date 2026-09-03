@@ -5,6 +5,15 @@
 #include <IO.h>
 #include <cstr.h>
 #include <kerrno.h>
+#include <drivers/drivers.h>
+
+void InitSerial();
+
+DEFINE_DEVICELESS_DRIVER(serial_driver) = {
+    .name = "serial_driver",
+    .initialize = InitSerial
+};
+
 
 uint16_t serial_port_addresses[] = {
     0x3F8,

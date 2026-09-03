@@ -81,6 +81,20 @@ inline void _set_bsp_interrupt_service_routine(void* ISR, uint8_t vector, uint8_
 
     local->interrupt_descriptor_table->set_interrupt_handler(ISR, vector, type_attr, selector);
 }
+
+inline void _set_interrupt_service_routine_for_all(void *ISR, uint8_t vector, uint8_t type_attr, uint8_t selector){
+    uint64_t rflags = spin_lock(&_cpu_local_data_chain_lock);
+
+    cpu_local_data *current_cpu = bsp_local;
+
+    while (current_cpu){
+        current_cpu->interrupt_descriptor_table->set_interrupt_handler(ISR, vector, type_attr, selector);
+        current_cpu = current_cpu->next;
+    }
+
+    spin_unlock(&_cpu_local_data_chain_lock, rflags);
+}
+
 // @brief Signals EOI (End Of Interrupt) to the local apic
 inline void EOI(){
     cpu_local_data* local = get_cpu_local_data();
